@@ -1,0 +1,19 @@
+{
+  "name": "@agents-haus/agent-runtime",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solana/kit": "^2.1.0",
+    "@agents-haus/sdk": "workspace:*",
+    "@agents-haus/common": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/bun": "^1.2.0"
+  }
+}

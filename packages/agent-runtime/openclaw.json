@@ -1,0 +1,31 @@
+{
+  "agents": {
+    "default": {
+      "model": "openrouter/moonshotai/kimi-k2.5",
+      "maxTokens": 4096,
+      "temperature": 0.7
+    }
+  },
+  "gateway": {
+    "port": 3001
+  },
+  "provider": {
+    "openrouter": {
+      "apiKey": "${OPENROUTER_API_KEY}",
+      "baseUrl": "https://openrouter.ai/api/v1"
+    }
+  },
+  "skills": {
+    "entries": {
+      "alpha-haus": {
+        "enabled": true,
+        "env": {
+          "SOLANA_RPC_URL": "${SOLANA_RPC_URL}",
+          "EXECUTOR_KEYPAIR": "${EXECUTOR_KEYPAIR}",
+          "SOUL_MINT_ADDRESS": "${SOUL_MINT_ADDRESS}",
+          "AGENTS_HAUS_PROGRAM_ID": "${AGENTS_HAUS_PROGRAM_ID}"
+        }
+      }
+    }
+  }
+}

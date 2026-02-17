@@ -1,0 +1,11 @@
+[workspace]
+members = ["programs/agents-haus"]
+resolver = "2"
+
+[workspace.dependencies]
+anchor-lang = "0.31.1"
+anchor-spl = "0.31.1"
+mpl-core = { version = "0.11.1", features = ["anchor"] }
+
+[profile.release]
+overflow-checks = true

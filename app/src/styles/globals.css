@@ -1,0 +1,38 @@
+@import 'tailwindcss';
+
+@theme {
+  /* Warm cream palette inspired by MoreMarkets */
+  --color-surface: #f5f1ea;
+  --color-surface-raised: #ffffff;
+  --color-surface-overlay: #ece7dd;
+  --color-surface-inset: #eae5db;
+
+  /* Text */
+  --color-ink: #1a1814;
+  --color-ink-secondary: #6b6354;
+  --color-ink-muted: #9e9585;
+
+  /* Accent — warm orange-red */
+  --color-brand-500: #dd400f;
+  --color-brand-600: #c4370d;
+  --color-brand-700: #a82e0b;
+
+  /* Functional */
+  --color-success: #16a34a;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+
+  /* Borders */
+  --color-border: #d8d2c6;
+  --color-border-light: #e8e3d9;
+}
+
+@layer base {
+  body {
+    @apply bg-surface text-ink;
+  }
+
+  ::selection {
+    background-color: rgba(221, 64, 15, 0.15);
+  }
+}
