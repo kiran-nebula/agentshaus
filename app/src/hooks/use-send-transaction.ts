@@ -9,6 +9,7 @@ import {
   setTransactionMessageLifetimeUsingBlockhash,
   appendTransactionMessageInstructions,
   compileTransaction,
+  partiallySignTransaction,
   getBase64EncodedWireTransaction,
 } from '@solana/kit';
 import {
@@ -17,13 +18,22 @@ import {
 } from '@privy-io/react-auth/solana';
 import { useSolanaRpc } from './use-solana-rpc';
 
+/** A keypair signer for additional signers (e.g. soul asset mint) */
+export interface KeypairSigner {
+  publicKey: CryptoKey;
+  privateKey: CryptoKey;
+}
+
 export function useSendTransaction() {
   const { wallets } = useConnectedStandardWallets();
   const { signAndSendTransaction } = useStandardSignAndSendTransaction();
   const { rpc } = useSolanaRpc();
 
   const sendTransaction = useCallback(
-    async (instructions: IInstruction[]): Promise<string> => {
+    async (
+      instructions: IInstruction[],
+      additionalSigners?: KeypairSigner[],
+    ): Promise<string> => {
       const wallet = wallets[0];
       if (!wallet) throw new Error('No wallet connected');
 
@@ -40,7 +50,18 @@ export function useSendTransaction() {
         (msg) => appendTransactionMessageInstructions(instructions, msg),
       );
 
-      const compiled = compileTransaction(message);
+      let compiled = compileTransaction(message);
+
+      // Partially sign with additional keypair signers (e.g. soul asset)
+      if (additionalSigners && additionalSigners.length > 0) {
+        for (const signer of additionalSigners) {
+          compiled = await partiallySignTransaction(
+            [signer],
+            compiled,
+          );
+        }
+      }
+
       const encodedTx = getBase64EncodedWireTransaction(compiled);
       const txBytes = Uint8Array.from(atob(encodedTx), (c) => c.charCodeAt(0));
 

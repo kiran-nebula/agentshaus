@@ -33,6 +33,7 @@ export function CreateAgentForm() {
   const [maxSolPerEpoch, setMaxSolPerEpoch] = useState('0.1');
   const [autoReclaim, setAutoReclaim] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitPhase, setSubmitPhase] = useState<'idle' | 'minting' | 'deploying' | 'done'>('idle');
   const [error, setError] = useState<string | null>(null);
 
   const stepIndex = STEPS.indexOf(step);
@@ -62,12 +63,23 @@ export function CreateAgentForm() {
     }
 
     setIsSubmitting(true);
+    setSubmitPhase('minting');
     setError(null);
 
     try {
+      // 1. Generate soul asset keypair (for the NFT)
       const soulAssetKeypair = await generateKeyPair();
       const soulAssetAddress = await getAddressFromPublicKey(soulAssetKeypair.publicKey);
 
+      // 2. Generate executor keypair (for the runtime to sign txs)
+      const executorKeypair = await generateKeyPair();
+      const executorAddress = await getAddressFromPublicKey(executorKeypair.publicKey);
+      const executorSecretBytes = new Uint8Array(
+        executorKeypair.privateKey as unknown as ArrayBuffer,
+      );
+      const executorSecretJson = JSON.stringify(Array.from(executorSecretBytes));
+
+      // 3. Hash personality for on-chain storage
       const personalityConfig = JSON.stringify({ bio, model, maxSolPerEpoch, autoReclaim });
       const encoder = new TextEncoder();
       const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(personalityConfig));
@@ -75,26 +87,50 @@ export function CreateAgentForm() {
         .map((b) => b.toString(16).padStart(2, '0'))
         .join('');
 
-      const executorPubkey = soulAssetAddress;
-
+      // 4. Build + send the on-chain create agent transaction
       const ix = await createAgent({
         name,
         uri: `https://agents.haus/api/agent/${soulAssetAddress}`,
         personalityHash,
         strategy,
-        executorPubkey: executorPubkey as string,
+        executorPubkey: executorAddress as string,
         soulAssetKeypair: {
           publicKey: soulAssetAddress,
           secretKey: new Uint8Array(soulAssetKeypair.privateKey as unknown as ArrayBuffer),
         },
       });
 
-      const signature = await sendTransaction([ix]);
-      console.log('Agent created! Signature:', signature);
+      // Soul asset keypair must co-sign the transaction
+      const signature = await sendTransaction([ix], [soulAssetKeypair]);
+      console.log('Agent created on-chain! Signature:', signature);
+
+      // 5. Deploy the agent runtime to Fly.io
+      setSubmitPhase('deploying');
+      try {
+        const deployRes = await fetch(`/api/agent/${soulAssetAddress}/deploy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ executorKeypair: executorSecretJson }),
+        });
+
+        if (!deployRes.ok) {
+          const deployErr = await deployRes.json();
+          console.warn('Deploy failed (agent still created on-chain):', deployErr);
+          // Don't block navigation — the agent exists, deploy can be retried
+        } else {
+          const deployData = await deployRes.json();
+          console.log('Agent machine deployed:', deployData);
+        }
+      } catch (deployErr) {
+        console.warn('Deploy request failed:', deployErr);
+      }
+
+      setSubmitPhase('done');
       router.push(`/agent/${soulAssetAddress}`);
     } catch (err) {
       console.error('Failed to create agent:', err);
       setError(err instanceof Error ? err.message : 'Failed to create agent');
+      setSubmitPhase('idle');
     } finally {
       setIsSubmitting(false);
     }
@@ -264,7 +300,11 @@ export function CreateAgentForm() {
             disabled={isSubmitting}
             className="rounded-full bg-brand-500 px-6 py-2 text-sm font-semibold text-white hover:bg-brand-600 transition-colors disabled:opacity-50"
           >
-            {isSubmitting ? 'Minting...' : 'Mint Soul NFT & Deploy'}
+            {submitPhase === 'minting'
+              ? 'Minting on-chain...'
+              : submitPhase === 'deploying'
+                ? 'Deploying runtime...'
+                : 'Mint Soul NFT & Deploy'}
           </button>
         ) : (
           <button
