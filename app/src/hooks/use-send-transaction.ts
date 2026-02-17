@@ -11,11 +11,15 @@ import {
   compileTransaction,
   getBase64EncodedWireTransaction,
 } from '@solana/kit';
-import { useSolanaWallets } from '@privy-io/react-auth';
+import {
+  useConnectedStandardWallets,
+  useStandardSignAndSendTransaction,
+} from '@privy-io/react-auth/solana';
 import { useSolanaRpc } from './use-solana-rpc';
 
 export function useSendTransaction() {
-  const { wallets } = useSolanaWallets();
+  const { wallets } = useConnectedStandardWallets();
+  const { signAndSendTransaction } = useStandardSignAndSendTransaction();
   const { rpc } = useSolanaRpc();
 
   const sendTransaction = useCallback(
@@ -38,16 +42,35 @@ export function useSendTransaction() {
 
       const compiled = compileTransaction(message);
       const encodedTx = getBase64EncodedWireTransaction(compiled);
+      const txBytes = Uint8Array.from(atob(encodedTx), (c) => c.charCodeAt(0));
 
-      // Use Privy's signAndSendTransaction
-      const provider = await wallet.getProvider();
-      const { signature } = await (provider as any).signAndSendTransaction(
-        Buffer.from(encodedTx, 'base64'),
-      );
+      // Use Privy's standard sign-and-send (works with all wallets: Phantom, Backpack, etc.)
+      const { signature } = await signAndSendTransaction({
+        transaction: txBytes,
+        wallet,
+      });
 
-      return signature;
+      // Convert Uint8Array signature to base58 string
+      const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+      let num = BigInt(0);
+      for (const byte of signature) {
+        num = num * BigInt(256) + BigInt(byte);
+      }
+      let base58 = '';
+      while (num > BigInt(0)) {
+        const remainder = num % BigInt(58);
+        num = num / BigInt(58);
+        base58 = alphabet[Number(remainder)] + base58;
+      }
+      // Add leading '1's for leading zero bytes
+      for (const byte of signature) {
+        if (byte === 0) base58 = '1' + base58;
+        else break;
+      }
+
+      return base58;
     },
-    [wallets, rpc],
+    [wallets, signAndSendTransaction, rpc],
   );
 
   return { sendTransaction };

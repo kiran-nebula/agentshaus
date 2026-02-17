@@ -1,5 +1,7 @@
 import { CreateAgentForm } from '@/components/create-agent-form';
 
+export const dynamic = 'force-dynamic';
+
 export default function CreatePage() {
   return (
     <main className="mx-auto max-w-2xl px-6 py-12">
