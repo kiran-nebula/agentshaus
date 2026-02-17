@@ -18,7 +18,8 @@ export async function fetchAgentState(
     typeof response.value.data === 'string'
       ? response.value.data
       : (response.value.data as readonly string[])[0];
-  const data = new Uint8Array(Buffer.from(raw, 'base64'));
+  // Use atob for browser compatibility (no Buffer polyfill needed)
+  const data = Uint8Array.from(atob(raw), (c) => c.charCodeAt(0));
 
   // Verify 8-byte Anchor discriminator
   for (let i = 0; i < 8; i++) {
