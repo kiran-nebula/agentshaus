@@ -1,5 +1,5 @@
 import type { Rpc, SolanaRpcApi, Address } from '@solana/kit';
-import { getAddressDecoder, getBase64Decoder } from '@solana/kit';
+import { getAddressDecoder } from '@solana/kit';
 import { ALPHA_HAUS_PROGRAM_ID, EPOCH_STATUS_DISCRIMINATOR } from './constants';
 
 export interface EpochStatus {
@@ -51,10 +51,10 @@ function decodeEpochStatus(data: Uint8Array): EpochStatus | null {
 
 function decodeBase64AccountData(data: unknown): Uint8Array {
   if (typeof data === 'string') {
-    return new Uint8Array(Buffer.from(data, 'base64'));
+    return Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
   }
   if (Array.isArray(data)) {
-    return new Uint8Array(Buffer.from(data[0] as string, 'base64'));
+    return Uint8Array.from(atob(data[0] as string), (c) => c.charCodeAt(0));
   }
   // @solana/kit may return Uint8Array directly
   return data as Uint8Array;
@@ -79,6 +79,8 @@ export async function findCurrentEpochStatus(
 ): Promise<{ address: Address; status: EpochStatus } | null> {
   // Use getProgramAccounts with memcmp filter on discriminator
   // to find all epoch_status accounts, then pick the latest
+  const discB64 = btoa(String.fromCharCode(...EPOCH_STATUS_DISCRIMINATOR));
+
   const accounts = await (rpc.getProgramAccounts as Function)(
     ALPHA_HAUS_PROGRAM_ID,
     {
@@ -86,8 +88,8 @@ export async function findCurrentEpochStatus(
       filters: [
         {
           memcmp: {
-            offset: 0n,
-            bytes: Buffer.from(EPOCH_STATUS_DISCRIMINATOR).toString('base64'),
+            offset: BigInt(0),
+            bytes: discB64,
             encoding: 'base64',
           },
         },
