@@ -9,6 +9,7 @@ import {
   getAgentWalletPda,
   fetchAgentState,
   fetchAgentWalletBalance,
+  fetchAgentsByOwner,
 } from '@agents-haus/sdk';
 import type { AgentState } from '@agents-haus/sdk';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
@@ -28,6 +29,50 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [searched, setSearched] = useState(false);
   const [searchMint, setSearchMint] = useState('');
+  const [autoLoaded, setAutoLoaded] = useState(false);
+
+  // Auto-load agents for the connected wallet
+  useEffect(() => {
+    if (!authenticated || !wallets.length || autoLoaded) return;
+
+    const walletAddress = wallets[0].address as Address;
+    let cancelled = false;
+
+    async function loadWalletAgents() {
+      setLoading(true);
+      try {
+        const results = await fetchAgentsByOwner(rpc, walletAddress);
+        if (cancelled) return;
+
+        // Fetch balances for each agent
+        const entries: AgentEntry[] = await Promise.all(
+          results.map(async ({ state }) => {
+            const [agentWallet] = await getAgentWalletPda(state.soulMint);
+            const balance = await fetchAgentWalletBalance(rpc, agentWallet);
+            return {
+              soulMint: state.soulMint as string,
+              state,
+              balance,
+            };
+          }),
+        );
+
+        if (!cancelled) {
+          setAgents(entries);
+          setAutoLoaded(true);
+        }
+      } catch (err) {
+        console.error('Failed to load wallet agents:', err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadWalletAgents();
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticated, wallets, rpc, autoLoaded]);
 
   const handleSearch = useCallback(async () => {
     if (!searchMint.trim()) return;
@@ -51,10 +96,6 @@ export default function DashboardPage() {
       setLoading(false);
     }
   }, [searchMint, rpc]);
-
-  useEffect(() => {
-    setLoading(false);
-  }, []);
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -123,9 +164,9 @@ export default function DashboardPage() {
             </>
           ) : (
             <>
-              <p className="text-ink-secondary mb-2">No agents loaded</p>
+              <p className="text-ink-secondary mb-2">No agents found</p>
               <p className="text-ink-muted text-sm mb-5">
-                Enter a Soul Mint address above, or create a new agent
+                No agents are associated with your wallet yet. Create one or search by mint address.
               </p>
               <Link
                 href="/create"
@@ -139,7 +180,7 @@ export default function DashboardPage() {
       )}
 
       {loading && (
-        <div className="text-center py-12 text-ink-muted text-sm">Loading...</div>
+        <div className="text-center py-12 text-ink-muted text-sm">Loading agents...</div>
       )}
     </main>
   );

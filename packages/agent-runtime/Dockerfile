@@ -1,36 +1,42 @@
-FROM oven/bun:1.2 AS base
-LABEL fly_launch_runtime="Bun"
+FROM node:22-slim AS base
 WORKDIR /app
 
-# Install workspace dependencies
-COPY package.json pnpm-workspace.yaml ./
-COPY packages/agent-runtime/package.json ./packages/agent-runtime/
-COPY packages/sdk/package.json ./packages/sdk/
+# Install pnpm + bun
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+RUN npm install -g bun
+
+# Copy monorepo config + lockfile
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY packages/common/package.json ./packages/common/
+COPY packages/sdk/package.json ./packages/sdk/
+COPY packages/agent-runtime/package.json ./packages/agent-runtime/
 
-# Use bun to install (faster in container)
-RUN bun install --frozen-lockfile --production
+# Install all workspace deps
+RUN pnpm install --frozen-lockfile
 
-# Build stage
-FROM base AS build
+# Copy source
 COPY packages/common ./packages/common
 COPY packages/sdk ./packages/sdk
 COPY packages/agent-runtime ./packages/agent-runtime
 
-RUN cd packages/common && bun run build
-RUN cd packages/sdk && bun run build
-RUN cd packages/agent-runtime && bun run build
+# Build common + sdk (they emit to dist/)
+RUN pnpm --filter @agents-haus/common run build
+RUN pnpm --filter @agents-haus/sdk run build
 
-# Production stage
+# Production stage — slim image with bun for runtime
 FROM oven/bun:1.2-slim AS production
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY --from=build /app/packages/agent-runtime/dist ./dist
-COPY --from=build /app/packages/agent-runtime/workspace ./workspace
-COPY --from=build /app/packages/agent-runtime/openclaw.json ./openclaw.json
-COPY --from=build /app/node_modules ./node_modules
+# Copy built artifacts + source for agent-runtime (Bun runs TS directly)
+COPY --from=base /app/packages/common ./packages/common
+COPY --from=base /app/packages/sdk ./packages/sdk
+COPY --from=base /app/packages/agent-runtime ./packages/agent-runtime
+COPY --from=base /app/node_modules ./node_modules
+COPY --from=base /app/package.json ./package.json
+COPY --from=base /app/tsconfig.base.json ./tsconfig.base.json
 
 EXPOSE 3001
 
-CMD ["bun", "run", "dist/index.js"]
+WORKDIR /app/packages/agent-runtime
+CMD ["bun", "run", "src/index.ts"]

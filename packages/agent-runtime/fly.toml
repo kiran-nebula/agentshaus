@@ -8,17 +8,8 @@ primary_region = "iad"
   NODE_ENV = "production"
   PORT = "3001"
 
-[http_service]
-  internal_port = 3001
-  force_https = true
-  auto_stop_machines = "stop"
-  auto_start_machines = true
-  min_machines_running = 0
-
-  [http_service.concurrency]
-    type = "connections"
-    hard_limit = 25
-    soft_limit = 20
+# No [http_service] — each machine is an always-on agent process
+# managed individually via the Fly Machines API.
 
 [[vm]]
   memory = "512mb"

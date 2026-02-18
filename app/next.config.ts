@@ -3,6 +3,7 @@ import path from 'path';
 
 const nextConfig: NextConfig = {
   outputFileTracingRoot: path.join(__dirname, '..'),
+  serverExternalPackages: ['@solana/kit'],
   webpack: (config, { isServer }) => {
     if (!isServer) {
       config.resolve.fallback = {

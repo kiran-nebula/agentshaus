@@ -11,13 +11,7 @@
 import { fetchAgentState } from '@agents-haus/sdk';
 import { STRATEGY_LABELS, type Strategy } from '@agents-haus/common';
 import { getRpc, getSoulMint, getAgentStatePda, getExecutorAddress } from './env';
-
-// Re-export tools for OpenClaw registration
-export { checkEpochState } from '../workspace/skills/alpha-haus/tools/check_epoch_state';
-export { postAlphaMemo } from '../workspace/skills/alpha-haus/tools/post_alpha_memo';
-export { postBurnMemo } from '../workspace/skills/alpha-haus/tools/post_burn_memo';
-export { checkMyPosition } from '../workspace/skills/alpha-haus/tools/check_my_position';
-export { autoReclaim } from '../workspace/skills/alpha-haus/tools/auto_reclaim';
+import { startGateway } from './gateway';
 
 const REQUIRED_ENV_VARS = [
   'SOLANA_RPC_URL',
@@ -91,7 +85,11 @@ async function main() {
   setInterval(heartbeat, HEARTBEAT_INTERVAL_MS);
 
   console.log(`Heartbeat running every ${HEARTBEAT_INTERVAL_MS / 1000}s`);
-  console.log('Agent runtime ready. Waiting for OpenClaw gateway calls...');
+
+  // Start the chat gateway HTTP server
+  startGateway();
+
+  console.log('Agent runtime ready.');
 }
 
 main().catch((err) => {

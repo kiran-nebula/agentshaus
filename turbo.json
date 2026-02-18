@@ -3,7 +3,17 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": [".next/**", "dist/**"]
+      "outputs": [".next/**", "dist/**"],
+      "env": [
+        "NEXT_PUBLIC_PRIVY_APP_ID",
+        "NEXT_PUBLIC_SOLANA_RPC_URL",
+        "NEXT_PUBLIC_SOLANA_WS_URL",
+        "NEXT_PUBLIC_AGENTS_HAUS_PROGRAM_ID",
+        "PRIVY_APP_SECRET",
+        "FLY_API_TOKEN",
+        "FLY_APP_NAME",
+        "FLY_RUNTIME_IMAGE"
+      ]
     },
     "dev": {
       "cache": false,

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy } from '@privy-io/react-auth';
 import { generateKeyPair, getAddressFromPublicKey } from '@solana/kit';
+import { exportKeypairBytes } from '@/lib/export-keypair';
 import type { Address } from '@solana/kit';
 import { Strategy, STRATEGY_LABELS, STRATEGY_DESCRIPTIONS, DEFAULT_LLM_MODELS } from '@agents-haus/common';
 import { useAgentTransactions } from '@/hooks/use-agent-transactions';
@@ -72,12 +73,11 @@ export function CreateAgentForm() {
       const soulAssetAddress = await getAddressFromPublicKey(soulAssetKeypair.publicKey);
 
       // 2. Generate executor keypair (for the runtime to sign txs)
-      const executorKeypair = await generateKeyPair();
+      // Must be extractable so we can serialize the private key for the Fly machine env
+      const executorKeypair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
       const executorAddress = await getAddressFromPublicKey(executorKeypair.publicKey);
-      const executorSecretBytes = new Uint8Array(
-        executorKeypair.privateKey as unknown as ArrayBuffer,
-      );
-      const executorSecretJson = JSON.stringify(Array.from(executorSecretBytes));
+      const fullKeypairBytes = await exportKeypairBytes(executorKeypair);
+      const executorSecretJson = JSON.stringify(Array.from(fullKeypairBytes));
 
       // 3. Hash personality for on-chain storage
       const personalityConfig = JSON.stringify({ bio, model, maxSolPerEpoch, autoReclaim });
