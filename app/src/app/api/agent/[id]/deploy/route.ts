@@ -12,6 +12,17 @@ function getRpc(): Rpc<SolanaRpcApi> {
   return rpc;
 }
 
+function getRuntimeImage(appName: string): string {
+  const configured = process.env.FLY_RUNTIME_IMAGE?.trim();
+  if (configured) return configured;
+
+  const fallback = `registry.fly.io/${appName}:latest`;
+  console.warn(
+    `[deploy] FLY_RUNTIME_IMAGE not set, defaulting to ${fallback}. Set FLY_RUNTIME_IMAGE to pin an exact image.`,
+  );
+  return fallback;
+}
+
 /**
  * POST /api/agent/[id]/deploy
  * Create a Fly Machine for this agent.
@@ -80,10 +91,7 @@ export async function POST(
 
     // 4. Create Fly Machine (trim env vars to strip trailing newlines)
     const appName = (process.env.FLY_APP_NAME || 'agents-haus-runtime').trim();
-    const image = (
-      process.env.FLY_RUNTIME_IMAGE ||
-      `registry.fly.io/${appName}:deployment-01KHQ23V4R9E6B4W4V98T63BSW`
-    ).trim();
+    const image = getRuntimeImage(appName);
     const machine = await fly.createMachine({
       name: `agent-${soulMint.slice(0, 12)}`,
       image,

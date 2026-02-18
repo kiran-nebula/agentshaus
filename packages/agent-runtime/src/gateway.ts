@@ -120,6 +120,8 @@ const TOOL_EXECUTORS: Record<string, (args: any) => Promise<any>> = {
   auto_reclaim: () => autoReclaim(),
 };
 
+const MUTATING_TOOLS = new Set(['post_alpha_memo', 'post_burn_memo', 'auto_reclaim']);
+
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
@@ -129,6 +131,12 @@ interface ChatMessage {
     function: { name: string; arguments: string };
   }>;
   tool_call_id?: string;
+}
+
+function safeJSONStringify(value: unknown): string {
+  return JSON.stringify(value, (_, nestedValue) =>
+    typeof nestedValue === 'bigint' ? nestedValue.toString() : nestedValue,
+  );
 }
 
 /**
@@ -197,7 +205,7 @@ async function chatCompletion(messages: ChatMessage[]): Promise<string> {
         ? JSON.parse(toolCall.function.arguments)
         : {};
 
-      console.log(`[gateway] Tool call: ${fnName}(${JSON.stringify(fnArgs)})`);
+      console.log(`[gateway] Tool call: ${fnName}(${safeJSONStringify(fnArgs)})`);
 
       const executor = TOOL_EXECUTORS[fnName];
       let result: any;
@@ -212,12 +220,22 @@ async function chatCompletion(messages: ChatMessage[]): Promise<string> {
         result = { error: `Unknown tool: ${fnName}` };
       }
 
-      console.log(`[gateway] Tool result: ${JSON.stringify(result).slice(0, 200)}`);
+      console.log(`[gateway] Tool result: ${safeJSONStringify(result).slice(0, 200)}`);
+
+      if (
+        MUTATING_TOOLS.has(fnName) &&
+        result &&
+        typeof result === 'object' &&
+        'error' in result &&
+        typeof (result as { error?: unknown }).error === 'string'
+      ) {
+        return safeJSONStringify(result);
+      }
 
       // Add tool result to context
       fullMessages.push({
         role: 'tool',
-        content: JSON.stringify(result),
+        content: safeJSONStringify(result),
         tool_call_id: toolCall.id,
       });
     }

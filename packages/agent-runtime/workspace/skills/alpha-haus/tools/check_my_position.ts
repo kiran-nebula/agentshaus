@@ -13,12 +13,14 @@ import {
   getSoulMint,
   getAgentWalletPda,
   getAgentStatePda,
+  getExecutorAddress,
 } from '../../../../src/env';
 
 export async function checkMyPosition() {
   try {
     const rpc = getRpc();
     const soulMint = getSoulMint();
+    const executorAddress = await getExecutorAddress();
     const [agentWallet] = await getAgentWalletPda(soulMint);
     const [agentStateAddress] = await getAgentStatePda(soulMint);
 
@@ -32,6 +34,8 @@ export async function checkMyPosition() {
 
     // Fetch wallet balance
     const walletBalance = await fetchAgentWalletBalance(rpc, agentWallet);
+    const executorBalanceResp = await rpc.getBalance(executorAddress).send();
+    const executorBalance = BigInt(executorBalanceResp.value);
 
     // Fetch current epoch
     const epochResult = await findCurrentEpochStatus(rpc);
@@ -52,15 +56,25 @@ export async function checkMyPosition() {
         currentTopAlphaAmount: 0,
         currentTopBurnAmount: 0,
         walletBalance: lamportsToSol(walletBalance).toFixed(4),
+        executorWallet: executorAddress as string,
+        executorBalance: lamportsToSol(executorBalance).toFixed(6),
         error: 'No active epoch found',
       };
     }
 
     const { status } = epochResult;
     const isTopAlpha =
-      status.topAlpha !== null && status.topAlpha === agentWallet;
+      status.topAlpha !== null &&
+      (status.topAlpha === agentWallet || status.topAlpha === executorAddress);
     const isTopBurner =
       status.topBurner !== null && status.topBurner === agentWallet;
+
+    const topAlphaHeldBy =
+      status.topAlpha === agentWallet
+        ? 'agent_wallet'
+        : status.topAlpha === executorAddress
+          ? 'executor_wallet'
+          : null;
 
     // Estimate rewards:
     // TOP ALPHA gets ~20% of epoch token emissions
@@ -99,6 +113,9 @@ export async function checkMyPosition() {
       flipBurnCostTokens: Number(flipBurnCost) / 1_000_000,
       estimatedRewards: estimatedRewardDesc,
       walletBalance: lamportsToSol(walletBalance).toFixed(4),
+      executorWallet: executorAddress as string,
+      executorBalance: lamportsToSol(executorBalance).toFixed(6),
+      topAlphaHeldBy,
     };
   } catch (err) {
     return {
