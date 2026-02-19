@@ -7,7 +7,7 @@ export default function CreatePage() {
     <main className="mx-auto max-w-2xl px-6 py-12">
       <h1 className="text-2xl font-bold text-ink mb-2">Create Your Agent</h1>
       <p className="text-sm text-ink-secondary mb-10">
-        Configure your autonomous AI agent and mint it as a tradeable Soul NFT.
+        Set identity + strategy, then mint your Soul NFT. Advanced config and runtime setup can be handled on the agent page.
       </p>
       <CreateAgentForm />
     </main>

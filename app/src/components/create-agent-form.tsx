@@ -4,20 +4,16 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy } from '@privy-io/react-auth';
 import { generateKeyPair, getAddressFromPublicKey } from '@solana/kit';
-import { exportKeypairBytes } from '@/lib/export-keypair';
-import type { Address } from '@solana/kit';
-import { Strategy, STRATEGY_LABELS, STRATEGY_DESCRIPTIONS, DEFAULT_LLM_MODELS } from '@agents-haus/common';
+import { Strategy, STRATEGY_LABELS, STRATEGY_DESCRIPTIONS } from '@agents-haus/common';
 import { useAgentTransactions } from '@/hooks/use-agent-transactions';
 import { useSendTransaction } from '@/hooks/use-send-transaction';
 
-type Step = 'personality' | 'strategy' | 'config' | 'review';
+type Step = 'identity' | 'mint';
 
-const STEPS: Step[] = ['personality', 'strategy', 'config', 'review'];
+const STEPS: Step[] = ['identity', 'mint'];
 const STEP_LABELS: Record<Step, string> = {
-  personality: 'Identity',
-  strategy: 'Strategy',
-  config: 'Config',
-  review: 'Review',
+  identity: 'Identity + Strategy',
+  mint: 'Mint',
 };
 
 export function CreateAgentForm() {
@@ -26,22 +22,23 @@ export function CreateAgentForm() {
   const { createAgent } = useAgentTransactions();
   const { sendTransaction } = useSendTransaction();
 
-  const [step, setStep] = useState<Step>('personality');
+  const [step, setStep] = useState<Step>('identity');
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
   const [strategy, setStrategy] = useState<Strategy>(Strategy.AlphaHunter);
-  const [model, setModel] = useState(DEFAULT_LLM_MODELS[0].id);
-  const [maxSolPerEpoch, setMaxSolPerEpoch] = useState('0.1');
-  const [autoReclaim, setAutoReclaim] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitPhase, setSubmitPhase] = useState<'idle' | 'minting' | 'deploying' | 'done'>('idle');
+  const [submitPhase, setSubmitPhase] = useState<'idle' | 'minting' | 'done'>('idle');
   const [error, setError] = useState<string | null>(null);
 
   const stepIndex = STEPS.indexOf(step);
 
   const handleNext = () => {
-    if (step === 'personality' && !name.trim()) {
+    if (step === 'identity' && !name.trim()) {
       setError('Agent name is required');
+      return;
+    }
+    if (step === 'identity' && !bio.trim()) {
+      setError('Agent bio is required');
       return;
     }
     setError(null);
@@ -72,24 +69,21 @@ export function CreateAgentForm() {
       const soulAssetKeypair = await generateKeyPair();
       const soulAssetAddress = await getAddressFromPublicKey(soulAssetKeypair.publicKey);
 
-      // 2. Generate executor keypair (for the runtime to sign txs)
-      // Must be extractable so we can serialize the private key for the Fly machine env
-      const executorKeypair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+      // 2. Generate executor keypair pubkey (can be replaced later from the agent page)
+      const executorKeypair = await generateKeyPair();
       const executorAddress = await getAddressFromPublicKey(executorKeypair.publicKey);
-      const fullKeypairBytes = await exportKeypairBytes(executorKeypair);
-      const executorSecretJson = JSON.stringify(Array.from(fullKeypairBytes));
 
-      // 3. Hash personality for on-chain storage
-      const personalityConfig = JSON.stringify({ bio, model, maxSolPerEpoch, autoReclaim });
+      // 3. Hash identity config for on-chain storage
+      const identityConfig = JSON.stringify({ bio: bio.trim() });
       const encoder = new TextEncoder();
-      const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(personalityConfig));
+      const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(identityConfig));
       const personalityHash = Array.from(new Uint8Array(hashBuffer))
         .map((b) => b.toString(16).padStart(2, '0'))
         .join('');
 
       // 4. Build + send the on-chain create agent transaction
       const ix = await createAgent({
-        name,
+        name: name.trim(),
         uri: `https://agents.haus/api/agent/${soulAssetAddress}`,
         personalityHash,
         strategy,
@@ -103,27 +97,6 @@ export function CreateAgentForm() {
       // Soul asset keypair must co-sign the transaction
       const signature = await sendTransaction([ix], [soulAssetKeypair]);
       console.log('Agent created on-chain! Signature:', signature);
-
-      // 5. Deploy the agent runtime to Fly.io
-      setSubmitPhase('deploying');
-      try {
-        const deployRes = await fetch(`/api/agent/${soulAssetAddress}/deploy`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ executorKeypair: executorSecretJson }),
-        });
-
-        if (!deployRes.ok) {
-          const deployErr = await deployRes.json();
-          console.warn('Deploy failed (agent still created on-chain):', deployErr);
-          // Don't block navigation — the agent exists, deploy can be retried
-        } else {
-          const deployData = await deployRes.json();
-          console.log('Agent machine deployed:', deployData);
-        }
-      } catch (deployErr) {
-        console.warn('Deploy request failed:', deployErr);
-      }
 
       setSubmitPhase('done');
       router.push(`/agent/${soulAssetAddress}`);
@@ -165,9 +138,9 @@ export function CreateAgentForm() {
         </div>
       )}
 
-      {/* Step: Personality */}
-      {step === 'personality' && (
-        <div className="space-y-5">
+      {/* Step: Identity + Strategy */}
+      {step === 'identity' && (
+        <div className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-ink mb-2">Agent Name</label>
             <input
@@ -189,72 +162,32 @@ export function CreateAgentForm() {
             />
             <p className="text-xs text-ink-muted mt-1.5">This becomes the agent&apos;s SOUL.md identity file.</p>
           </div>
-        </div>
-      )}
-
-      {/* Step: Strategy */}
-      {step === 'strategy' && (
-        <div className="grid grid-cols-2 gap-3">
-          {(Object.values(Strategy).filter((v) => typeof v === 'number') as Strategy[]).map(
-            (s) => (
-              <button
-                key={s}
-                onClick={() => setStrategy(s)}
-                className={`rounded-2xl border p-5 text-left transition-colors ${
-                  strategy === s
-                    ? 'border-ink bg-surface-raised shadow-sm'
-                    : 'border-border bg-surface-raised hover:border-ink-muted'
-                }`}
-              >
-                <div className="font-semibold text-ink mb-1">{STRATEGY_LABELS[s]}</div>
-                <div className="text-sm text-ink-secondary leading-relaxed">{STRATEGY_DESCRIPTIONS[s]}</div>
-              </button>
-            ),
-          )}
-        </div>
-      )}
-
-      {/* Step: Config */}
-      {step === 'config' && (
-        <div className="space-y-5">
           <div>
-            <label className="block text-sm font-medium text-ink mb-2">LLM Model</label>
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="w-full rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm text-ink focus:border-ink focus:outline-none transition-colors"
-            >
-              {DEFAULT_LLM_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name} — ${m.costPerMInput}/M in, ${m.costPerMOutput}/M out
-                </option>
-              ))}
-            </select>
+            <label className="block text-sm font-medium text-ink mb-2">Strategy</label>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {(Object.values(Strategy).filter((v) => typeof v === 'number') as Strategy[]).map(
+                (s) => (
+                  <button
+                    key={s}
+                    onClick={() => setStrategy(s)}
+                    className={`rounded-2xl border p-5 text-left transition-colors ${
+                      strategy === s
+                        ? 'border-ink bg-surface-raised shadow-sm'
+                        : 'border-border bg-surface-raised hover:border-ink-muted'
+                    }`}
+                  >
+                    <div className="font-semibold text-ink mb-1">{STRATEGY_LABELS[s]}</div>
+                    <div className="text-sm text-ink-secondary leading-relaxed">{STRATEGY_DESCRIPTIONS[s]}</div>
+                  </button>
+                ),
+              )}
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-ink mb-2">Max SOL per Epoch</label>
-            <input
-              type="number"
-              step="0.01"
-              value={maxSolPerEpoch}
-              onChange={(e) => setMaxSolPerEpoch(e.target.value)}
-              className="w-full rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm text-ink focus:border-ink focus:outline-none transition-colors"
-            />
-          </div>
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={autoReclaim}
-              onChange={(e) => setAutoReclaim(e.target.checked)}
-              className="rounded border-border accent-brand-500"
-            />
-            <span className="text-sm text-ink">Auto-reclaim position when flipped</span>
-          </label>
         </div>
       )}
 
-      {/* Step: Review */}
-      {step === 'review' && (
+      {/* Step: Mint */}
+      {step === 'mint' && (
         <div className="rounded-2xl border border-border bg-surface-raised p-6 space-y-4">
           <div className="flex justify-between text-sm">
             <span className="text-ink-muted">Name</span>
@@ -264,23 +197,15 @@ export function CreateAgentForm() {
             <span className="text-ink-muted">Strategy</span>
             <span className="font-medium text-ink">{STRATEGY_LABELS[strategy]}</span>
           </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-ink-muted">Model</span>
-            <span className="font-medium text-ink">
-              {DEFAULT_LLM_MODELS.find((m) => m.id === model)?.name}
-            </span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-ink-muted">Max SOL/Epoch</span>
-            <span className="font-medium font-mono text-ink">{maxSolPerEpoch} SOL</span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-ink-muted">Auto-reclaim</span>
-            <span className="font-medium text-ink">{autoReclaim ? 'Yes' : 'No'}</span>
+          <div className="space-y-2">
+            <div className="text-sm text-ink-muted">Bio</div>
+            <div className="rounded-xl bg-surface px-4 py-3 text-sm text-ink-secondary whitespace-pre-wrap">
+              {bio || '(empty)'}
+            </div>
           </div>
           <div className="pt-4 border-t border-border-light text-xs text-ink-muted">
-            This will mint a Soul NFT on Solana and create the agent state on-chain.
-            You can fund the agent after creation.
+            This mints your Soul NFT and creates agent state on-chain. Runtime deployment and advanced config can be set on the
+            agent page.
           </div>
         </div>
       )}
@@ -294,24 +219,20 @@ export function CreateAgentForm() {
         >
           Back
         </button>
-        {step === 'review' ? (
+        {step === 'mint' ? (
           <button
             onClick={handleSubmit}
             disabled={isSubmitting}
             className="rounded-full bg-brand-500 px-6 py-2 text-sm font-semibold text-white hover:bg-brand-600 transition-colors disabled:opacity-50"
           >
-            {submitPhase === 'minting'
-              ? 'Minting on-chain...'
-              : submitPhase === 'deploying'
-                ? 'Deploying runtime...'
-                : 'Mint Soul NFT & Deploy'}
+            {submitPhase === 'minting' ? 'Minting on-chain...' : 'Mint Soul NFT'}
           </button>
         ) : (
           <button
             onClick={handleNext}
             className="rounded-full bg-ink px-6 py-2 text-sm font-medium text-surface hover:bg-ink/90 transition-colors"
           >
-            Next
+            Continue to Mint
           </button>
         )}
       </div>
