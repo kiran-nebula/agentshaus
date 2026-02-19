@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import type { Address } from '@solana/kit';
 import { getAddressFromPublicKey } from '@solana/kit';
 import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
@@ -10,12 +10,21 @@ import { useAgentState } from '@/hooks/use-agent-state';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
 import { useAgentTransactions } from '@/hooks/use-agent-transactions';
 import { useSendTransaction } from '@/hooks/use-send-transaction';
-import { EpochStatus } from '@/components/epoch-status';
-import { ActivityLog } from '@/components/activity-log';
-import { AgentStats } from '@/components/agent-stats';
-import { AgentConfig } from '@/components/agent-config';
-import { FundWithdraw } from '@/components/fund-withdraw';
-import { AgentChat } from '@/components/agent-chat';
+import { DEFAULT_LLM_MODELS } from '@agents-haus/common';
+import {
+  Strategy,
+  STRATEGY_LABELS,
+  truncateAddress,
+  formatSol,
+  lamportsToSol,
+  solToLamports,
+} from '@agents-haus/common';
+import { findCurrentEpochStatus, type EpochStatus as EpochStatusData } from '@agents-haus/sdk';
+import type { AgentState } from '@agents-haus/sdk';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+
+/* ─── Types ─── */
 
 interface MachineInfo {
   deployed: boolean;
@@ -25,220 +34,596 @@ interface MachineInfo {
   name?: string;
 }
 
-function MachineStatus({
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+interface DeployPreset {
+  profileId: string;
+  skills: string[];
+  model: string | null;
+}
+
+/* ─── Icons ─── */
+
+function IconSettings({ className = '' }: { className?: string }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function IconPanel({ className = '' }: { className?: string }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M15 3v18" />
+    </svg>
+  );
+}
+
+function IconSend({ className = '' }: { className?: string }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M22 2L11 13" />
+      <path d="M22 2L15 22L11 13L2 9L22 2Z" />
+    </svg>
+  );
+}
+
+function IconX({ className = '' }: { className?: string }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M18 6L6 18M6 6l12 12" />
+    </svg>
+  );
+}
+
+function IconBack({ className = '' }: { className?: string }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M19 12H5M12 19l-7-7 7-7" />
+    </svg>
+  );
+}
+
+/* ─── Right Info Panel ─── */
+
+function InfoPanel({
+  agentState,
+  walletBalance,
+  agentWalletAddress,
+  machineState,
   soulMint,
+}: {
+  agentState: AgentState;
+  walletBalance: bigint;
+  agentWalletAddress: string | null;
+  machineState: string | null;
+  soulMint: string;
+}) {
+  const { rpc } = useSolanaRpc();
+  const [epochStatus, setEpochStatus] = useState<EpochStatusData | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const result = await findCurrentEpochStatus(rpc);
+        if (result && !cancelled) setEpochStatus(result.status);
+      } catch { /* ignore */ }
+    };
+    load();
+    const iv = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [rpc]);
+
+  const strategyLabel = STRATEGY_LABELS[agentState.strategy as Strategy] || 'Unknown';
+  const isAgentAlpha = agentWalletAddress && epochStatus?.topAlpha === agentWalletAddress;
+  const isAgentBurner = agentWalletAddress && epochStatus?.topBurner === agentWalletAddress;
+
+  return (
+    <div className="flex flex-col gap-4 h-full overflow-y-auto px-4 py-4 text-sm">
+      {/* Agent identity */}
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <span className={`inline-block h-2 w-2 rounded-full ${agentState.isActive ? 'bg-success' : 'bg-ink-muted'}`} />
+          <span className="text-xs font-medium text-ink">{agentState.isActive ? 'Active' : 'Paused'}</span>
+          {machineState && (
+            <span className={`ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+              machineState === 'started' ? 'bg-success/10 text-success' : 'bg-surface-inset text-ink-muted'
+            }`}>
+              {machineState}
+            </span>
+          )}
+        </div>
+        <div className="font-mono text-[10px] text-ink-muted truncate">{soulMint}</div>
+      </div>
+
+      {/* Wallet */}
+      <div className="rounded-xl bg-surface-inset p-3">
+        <div className="text-[10px] text-ink-muted uppercase tracking-wider mb-1">Wallet</div>
+        <div className="text-lg font-mono font-bold text-ink">
+          {lamportsToSol(walletBalance).toFixed(4)}
+          <span className="text-xs text-ink-muted font-normal ml-1">SOL</span>
+        </div>
+      </div>
+
+      {/* Epoch */}
+      <div className="rounded-xl bg-surface-inset p-3">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[10px] text-ink-muted uppercase tracking-wider">Epoch</span>
+          <span className="font-mono text-xs text-ink">{epochStatus ? Number(epochStatus.epoch) : '—'}</span>
+        </div>
+        <div className="space-y-2">
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-ink-muted">Alpha</span>
+              {isAgentAlpha && <span className="text-[9px] bg-warning/10 text-warning px-1 py-0.5 rounded-full font-medium">YOU</span>}
+            </div>
+            <div className="font-mono text-[11px] text-ink-muted">{epochStatus?.topAlpha ? truncateAddress(epochStatus.topAlpha as string) : '—'}</div>
+            <div className="font-mono text-xs text-ink">{epochStatus ? `${lamportsToSol(epochStatus.topAlphaAmount).toFixed(4)} SOL` : '—'}</div>
+          </div>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-ink-muted">Burner</span>
+              {isAgentBurner && <span className="text-[9px] bg-brand-500/10 text-brand-500 px-1 py-0.5 rounded-full font-medium">YOU</span>}
+            </div>
+            <div className="font-mono text-[11px] text-ink-muted">{epochStatus?.topBurner ? truncateAddress(epochStatus.topBurner as string) : '—'}</div>
+            <div className="font-mono text-xs text-ink">{epochStatus ? `${Number(epochStatus.topBurnAmount).toLocaleString()} tokens` : '—'}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="rounded-xl bg-surface-inset p-3">
+        <div className="text-[10px] text-ink-muted uppercase tracking-wider mb-2">Stats</div>
+        <div className="space-y-1.5 text-xs">
+          <Row label="Strategy" value={strategyLabel} />
+          <Row label="Tips" value={agentState.totalTips.toString()} mono />
+          <Row label="Burns" value={agentState.totalBurns.toString()} mono />
+          <Row label="SOL Spent" value={formatSol(agentState.totalSolSpent)} mono />
+          <Row label="Tokens Burned" value={(Number(agentState.totalTokensBurned) / 1_000_000).toLocaleString()} mono />
+          <Row label="Rewards" value={`${formatSol(agentState.totalRewards)} SOL`} mono className="text-success" />
+          <div className="border-t border-border-light pt-1.5 mt-1.5 space-y-1.5">
+            <Row label="Alpha Wins" value={agentState.epochsWonAlpha.toString()} mono />
+            <Row label="Burner Wins" value={agentState.epochsWonBurner.toString()} mono />
+          </div>
+        </div>
+      </div>
+
+      <div className="text-[10px] text-ink-muted text-center">
+        Created {new Date(Number(agentState.createdAt) * 1000).toLocaleDateString()}
+        {agentState.lastActivity > BigInt(0) && (
+          <> · Active {new Date(Number(agentState.lastActivity) * 1000).toLocaleDateString()}</>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value, mono, className }: { label: string; value: string; mono?: boolean; className?: string }) {
+  return (
+    <div className="flex justify-between">
+      <span className="text-ink-muted">{label}</span>
+      <span className={`${mono ? 'font-mono' : 'font-medium'} ${className || 'text-ink'}`}>{value}</span>
+    </div>
+  );
+}
+
+/* ─── Settings Modal ─── */
+
+type SettingsTab = 'general' | 'runtime' | 'wallet';
+
+const SETTINGS_TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
+  {
+    id: 'general',
+    label: 'General',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    ),
+  },
+  {
+    id: 'runtime',
+    label: 'Runtime',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+        <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+        <line x1="6" y1="6" x2="6.01" y2="6" />
+        <line x1="6" y1="18" x2="6.01" y2="18" />
+      </svg>
+    ),
+  },
+  {
+    id: 'wallet',
+    label: 'Wallet',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" />
+        <path d="M3 5v14a2 2 0 0 0 2 2h16v-5" />
+        <path d="M18 12a2 2 0 0 0 0 4h4v-4Z" />
+      </svg>
+    ),
+  },
+];
+
+function SettingsModal({
+  soulMint,
+  agentState,
   isOwner,
-  onMachineUpdate,
+  walletBalance,
+  machineState,
+  machineInfo,
+  onRefresh,
+  onClose,
+  onDeploy,
+  onMachineAction,
 }: {
   soulMint: string;
+  agentState: AgentState;
   isOwner: boolean;
-  onMachineUpdate?: (machine: MachineInfo | null) => void;
+  walletBalance: bigint;
+  machineState: string | null;
+  machineInfo: MachineInfo | null;
+  onRefresh: () => void;
+  onClose: () => void;
+  onDeploy: () => Promise<void>;
+  onMachineAction: (action: 'start' | 'stop') => Promise<void>;
 }) {
-  const { updateExecutor } = useAgentTransactions();
+  const { authenticated, login } = usePrivy();
+  const { updateConfig, updateExecutor, fundAgent, withdrawFromAgent } = useAgentTransactions();
   const { sendTransaction } = useSendTransaction();
-  const [machine, setMachine] = useState<MachineInfo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [deployPhase, setDeployPhase] = useState<'idle' | 'keygen' | 'onchain' | 'deploying'>('idle');
-  const [deployError, setDeployError] = useState<string | null>(null);
 
-  const fetchMachine = useCallback(async () => {
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [newExecutor, setNewExecutor] = useState('');
+  const [showExecutorInput, setShowExecutorInput] = useState(false);
+  const [fundMode, setFundMode] = useState<'fund' | 'withdraw' | null>(null);
+  const [fundAmount, setFundAmount] = useState('');
+
+  const handleToggleActive = async () => {
+    if (!authenticated) { login(); return; }
+    setLoading(true);
+    setError(null);
     try {
-      const res = await fetch(`/api/agent/${soulMint}/machine`);
-      if (res.ok) {
-        const data = await res.json();
-        setMachine(data);
-        onMachineUpdate?.(data);
-      }
-    } catch {
-      // ignore
+      const ix = await updateConfig(soulMint, { isActive: !agentState.isActive });
+      await sendTransaction([ix]);
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update');
     } finally {
       setLoading(false);
     }
-  }, [soulMint, onMachineUpdate]);
-
-  useEffect(() => {
-    fetchMachine();
-    const interval = setInterval(fetchMachine, 15_000);
-    return () => clearInterval(interval);
-  }, [fetchMachine]);
-
-  const handleStart = async () => {
-    setActionLoading(true);
-    try {
-      await fetch(`/api/agent/${soulMint}/machine/start`, { method: 'POST' });
-      await new Promise((r) => setTimeout(r, 2000));
-      await fetchMachine();
-    } finally {
-      setActionLoading(false);
-    }
   };
 
-  const handleStop = async () => {
-    setActionLoading(true);
+  const handleUpdateStrategy = async (strategy: number) => {
+    if (!authenticated) { login(); return; }
+    if (strategy === agentState.strategy) return;
+    setLoading(true);
+    setError(null);
     try {
-      await fetch(`/api/agent/${soulMint}/machine/stop`, { method: 'POST' });
-      await new Promise((r) => setTimeout(r, 2000));
-      await fetchMachine();
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleDeploy = async () => {
-    setDeployPhase('keygen');
-    setDeployError(null);
-
-    try {
-      // 1. Generate a new executor keypair (extractable so we can serialize the secret)
-      const executorKeypair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
-      const executorAddress = await getAddressFromPublicKey(executorKeypair.publicKey);
-      const fullKeypairBytes = await exportKeypairBytes(executorKeypair);
-      const executorSecretJson = JSON.stringify(Array.from(fullKeypairBytes));
-
-      // 2. Deploy to Fly.io FIRST (before on-chain update, so we don't burn the keypair if deploy fails)
-      setDeployPhase('deploying');
-      const deployRes = await fetch(`/api/agent/${soulMint}/deploy`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ executorKeypair: executorSecretJson, force: true }),
-      });
-
-      if (!deployRes.ok) {
-        const deployErr = await deployRes.json();
-        throw new Error(deployErr.error || 'Deploy failed');
-      }
-
-      const deployData = await deployRes.json();
-      console.log('Agent deployed:', deployData);
-
-      // 3. Update executor on-chain (only after deploy succeeds)
-      setDeployPhase('onchain');
-      const ix = await updateExecutor(soulMint, executorAddress as string);
+      const ix = await updateConfig(soulMint, { strategy });
       await sendTransaction([ix]);
-
-      // Refresh machine status
-      await new Promise((r) => setTimeout(r, 2000));
-      await fetchMachine();
+      onRefresh();
     } catch (err) {
-      console.error('Deploy error:', err);
-      setDeployError(err instanceof Error ? err.message : 'Deploy failed');
+      setError(err instanceof Error ? err.message : 'Failed to update');
     } finally {
-      setDeployPhase('idle');
+      setLoading(false);
     }
   };
 
-  const stateColor = (state?: string) => {
-    switch (state) {
-      case 'started':
-        return 'bg-success/10 text-success';
-      case 'stopped':
-        return 'bg-surface-inset text-ink-muted';
-      case 'starting':
-      case 'stopping':
-        return 'bg-warning/10 text-warning';
-      default:
-        return 'bg-surface-inset text-ink-muted';
+  const handleUpdateExecutor = async () => {
+    if (!authenticated) { login(); return; }
+    if (!newExecutor.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const ix = await updateExecutor(soulMint, newExecutor.trim());
+      await sendTransaction([ix]);
+      setNewExecutor('');
+      setShowExecutorInput(false);
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const deployButtonLabel = () => {
-    switch (deployPhase) {
-      case 'keygen':
-        return 'Generating keys...';
-      case 'onchain':
-        return 'Updating on-chain...';
-      case 'deploying':
-        return 'Deploying to Fly...';
-      default:
-        return 'Deploy Runtime';
+  const handleFundAction = async () => {
+    if (!authenticated) { login(); return; }
+    const solAmount = parseFloat(fundAmount);
+    if (isNaN(solAmount) || solAmount <= 0) { setError('Enter a valid amount'); return; }
+    if (fundMode === 'withdraw' && solToLamports(solAmount) > walletBalance) { setError('Insufficient balance'); return; }
+    setLoading(true);
+    setError(null);
+    try {
+      const lamports = solToLamports(solAmount);
+      const ix = fundMode === 'fund'
+        ? await fundAgent(soulMint, lamports)
+        : await withdrawFromAgent(soulMint, lamports);
+      await sendTransaction([ix]);
+      setFundAmount('');
+      setFundMode(null);
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Transaction failed');
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="rounded-2xl border border-border bg-surface-raised p-6">
-      <h3 className="text-base font-semibold text-ink mb-3">Runtime</h3>
-
-      {loading && (
-        <div className="text-sm text-ink-muted">Checking...</div>
-      )}
-
-      {!loading && machine && !machine.deployed && (
-        <div className="space-y-3">
-          <p className="text-sm text-ink-muted">
-            Runtime not deployed.
-          </p>
-          {isOwner && (
-            <>
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-ink/20 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-[680px] bg-surface-raised border border-border rounded-2xl shadow-xl settings-modal-enter flex overflow-hidden" style={{ height: 'min(520px, 80vh)' }}>
+        {/* Left nav */}
+        <div className="w-44 shrink-0 border-r border-border-light py-5 px-3 flex flex-col">
+          <h2 className="text-xs font-semibold text-ink-muted uppercase tracking-wider px-3 mb-3">Settings</h2>
+          <nav className="flex flex-col gap-0.5">
+            {SETTINGS_TABS.map((tab) => (
               <button
-                onClick={handleDeploy}
-                disabled={deployPhase !== 'idle'}
-                className="w-full rounded-full bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 transition-colors disabled:opacity-50"
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-left ${
+                  activeTab === tab.id
+                    ? 'bg-surface-overlay text-ink'
+                    : 'text-ink-secondary hover:bg-surface-overlay/50 hover:text-ink'
+                }`}
               >
-                {deployButtonLabel()}
+                <span className={activeTab === tab.id ? 'text-brand-500' : 'text-ink-muted'}>{tab.icon}</span>
+                {tab.label}
               </button>
-              <p className="text-xs text-ink-muted">
-                Generates a new executor keypair, updates it on-chain, and deploys to Fly.io.
-              </p>
-              {deployError && (
-                <p className="text-xs text-danger">{deployError}</p>
-              )}
-            </>
-          )}
-          {!isOwner && (
-            <p className="text-xs text-ink-muted">Only the owner can deploy the runtime.</p>
-          )}
+            ))}
+          </nav>
         </div>
-      )}
 
-      {!loading && machine?.deployed && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-ink-muted">Status</span>
-            <span
-              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${stateColor(machine.state)}`}
+        {/* Right content */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Close button */}
+          <div className="flex justify-end px-4 pt-4 pb-0">
+            <button onClick={onClose} className="rounded-lg p-1.5 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors">
+              <IconX />
+            </button>
+          </div>
+
+          {/* Content area */}
+          <div className="flex-1 overflow-y-auto px-6 pb-6 pt-2">
+            {error && <div className="rounded-xl border border-danger/20 bg-danger/5 px-4 py-2 text-xs text-danger mb-4">{error}</div>}
+
+            {/* General tab */}
+            {activeTab === 'general' && (
+              <div className="space-y-5">
+                {/* Agent Status */}
+                <div className="rounded-xl border border-border-light p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-ink">Agent Status</div>
+                      <div className="text-xs text-ink-muted mt-0.5">{agentState.isActive ? 'Agent is running' : 'Agent is paused'}</div>
+                    </div>
+                    {isOwner && (
+                      <button
+                        onClick={handleToggleActive}
+                        disabled={loading}
+                        className={`rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                          agentState.isActive ? 'bg-danger/10 text-danger hover:bg-danger/15' : 'bg-success/10 text-success hover:bg-success/15'
+                        }`}
+                      >
+                        {agentState.isActive ? 'Pause' : 'Resume'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Strategy */}
+                <div className="rounded-xl border border-border-light p-4">
+                  <div className="text-sm font-medium text-ink mb-1">Strategy</div>
+                  <div className="text-xs text-ink-muted mb-3">How your agent participates in epochs</div>
+                  {isOwner ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      {(Object.values(Strategy).filter((v) => typeof v === 'number') as Strategy[]).map((s) => (
+                        <button
+                          key={s}
+                          onClick={() => handleUpdateStrategy(s)}
+                          disabled={loading}
+                          className={`rounded-xl px-3 py-2.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                            agentState.strategy === s ? 'bg-ink text-surface' : 'bg-surface-inset text-ink-secondary hover:bg-surface-overlay'
+                          }`}
+                        >
+                          {STRATEGY_LABELS[s]}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-ink">{STRATEGY_LABELS[agentState.strategy as Strategy]}</div>
+                  )}
+                </div>
+
+                {/* Executor */}
+                <div className="rounded-xl border border-border-light p-4">
+                  <div className="text-sm font-medium text-ink mb-1">Executor</div>
+                  <div className="text-xs text-ink-muted font-mono mb-2">{truncateAddress(agentState.executor as string, 8)}</div>
+                  {isOwner && !showExecutorInput && (
+                    <button onClick={() => setShowExecutorInput(true)} className="text-xs text-brand-500 hover:text-brand-700 font-medium transition-colors">Change executor</button>
+                  )}
+                  {isOwner && showExecutorInput && (
+                    <div className="flex gap-2 mt-1">
+                      <input value={newExecutor} onChange={(e) => setNewExecutor(e.target.value)} placeholder="New executor pubkey" className="flex-1 rounded-xl border border-border bg-surface px-3 py-1.5 text-xs font-mono text-ink focus:border-ink focus:outline-none transition-colors" />
+                      <button onClick={handleUpdateExecutor} disabled={loading} className="rounded-full bg-ink px-3 py-1.5 text-xs font-medium text-surface disabled:opacity-50">Save</button>
+                      <button onClick={() => { setShowExecutorInput(false); setNewExecutor(''); }} className="text-xs text-ink-muted hover:text-ink-secondary transition-colors">Cancel</button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Owner info */}
+                <div className="text-[10px] text-ink-muted">
+                  Owner: <span className="font-mono">{truncateAddress(agentState.owner as string, 8)}</span>
+                  {' · '}
+                  Soul: <span className="font-mono">{truncateAddress(agentState.soulMint as string, 8)}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Runtime tab */}
+            {activeTab === 'runtime' && (
+              <div className="space-y-5">
+                <div className="rounded-xl border border-border-light p-4">
+                  <div className="text-sm font-medium text-ink mb-1">Runtime Status</div>
+                  {machineInfo && !machineInfo.deployed && (
+                    <>
+                      <div className="text-xs text-ink-muted mb-3">Runtime not deployed yet.</div>
+                      {isOwner && (
+                        <button onClick={onDeploy} disabled={loading} className="w-full rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50">
+                          Deploy Runtime
+                        </button>
+                      )}
+                      {!isOwner && <div className="text-xs text-ink-muted">Only the owner can deploy the runtime.</div>}
+                    </>
+                  )}
+                  {machineInfo?.deployed && (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className={`inline-block h-2 w-2 rounded-full ${machineState === 'started' ? 'bg-success' : 'bg-ink-muted'}`} />
+                        <span className="text-ink font-medium">{machineState || 'unknown'}</span>
+                      </div>
+                      <div className="space-y-2 text-xs">
+                        <div className="flex justify-between"><span className="text-ink-muted">Region</span><span className="font-mono text-ink">{machineInfo.region || '—'}</span></div>
+                        <div className="flex justify-between"><span className="text-ink-muted">Machine</span><span className="font-mono text-ink-muted">{machineInfo.machineId?.slice(0, 12) || '—'}</span></div>
+                      </div>
+                      {isOwner && (
+                        <div className="flex gap-2 pt-1">
+                          {machineState === 'stopped' && (
+                            <button onClick={() => onMachineAction('start')} disabled={loading} className="flex-1 rounded-xl bg-success/10 text-success px-3 py-2 text-xs font-medium hover:bg-success/15 transition-colors disabled:opacity-50">Start</button>
+                          )}
+                          {machineState === 'started' && (
+                            <button onClick={() => onMachineAction('stop')} disabled={loading} className="flex-1 rounded-xl bg-danger/10 text-danger px-3 py-2 text-xs font-medium hover:bg-danger/15 transition-colors disabled:opacity-50">Stop</button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Wallet tab */}
+            {activeTab === 'wallet' && (
+              <div className="space-y-5">
+                <div className="rounded-xl border border-border-light p-4">
+                  <div className="text-sm font-medium text-ink mb-1">Balance</div>
+                  <div className="text-2xl font-mono font-bold text-ink mb-4">
+                    {lamportsToSol(walletBalance).toFixed(4)} <span className="text-sm text-ink-muted font-sans font-normal">SOL</span>
+                  </div>
+                  {fundMode === null ? (
+                    <div className="flex gap-2">
+                      <button onClick={() => setFundMode('fund')} className="flex-1 rounded-full bg-ink px-4 py-2.5 text-sm font-medium text-surface hover:bg-ink/90 transition-colors">Fund</button>
+                      {isOwner && (
+                        <button onClick={() => setFundMode('withdraw')} className="flex-1 rounded-full border border-border px-4 py-2.5 text-sm font-medium text-ink-secondary hover:bg-surface-overlay transition-colors">Withdraw</button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <input type="number" step="0.001" min="0" value={fundAmount} onChange={(e) => setFundAmount(e.target.value)} placeholder="0.00" className="flex-1 rounded-xl border border-border bg-surface px-3 py-2.5 text-ink font-mono text-sm focus:border-ink focus:outline-none transition-colors" />
+                        <span className="text-sm text-ink-muted">SOL</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={handleFundAction} disabled={loading} className="flex-1 rounded-full bg-ink px-4 py-2.5 text-sm font-medium text-surface disabled:opacity-50">
+                          {loading ? 'Processing...' : fundMode === 'fund' ? 'Deposit' : 'Withdraw'}
+                        </button>
+                        <button onClick={() => { setFundMode(null); setFundAmount(''); setError(null); }} className="rounded-full border border-border px-4 py-2.5 text-sm text-ink-secondary hover:bg-surface-overlay transition-colors">Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-xs font-medium text-ink-muted uppercase tracking-wider mb-2">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+/* ─── Model Selector ─── */
+
+function ModelSelector({
+  modelRef,
+  modelOpen,
+  setModelOpen,
+  currentModel,
+  selectedModel,
+  setSelectedModel,
+  size = 'sm',
+}: {
+  modelRef: React.RefObject<HTMLDivElement | null>;
+  modelOpen: boolean;
+  setModelOpen: (v: boolean) => void;
+  currentModel: (typeof DEFAULT_LLM_MODELS)[number];
+  selectedModel: string;
+  setSelectedModel: (v: string) => void;
+  size?: 'sm' | 'lg';
+}) {
+  const isLg = size === 'lg';
+  return (
+    <div className="relative" ref={modelRef}>
+      <button
+        type="button"
+        onClick={() => setModelOpen(!modelOpen)}
+        className={`inline-flex items-center rounded-full border border-border-light text-ink-secondary hover:bg-surface-overlay transition-colors ${
+          isLg ? 'gap-2 px-3.5 py-1.5 text-sm' : 'gap-1.5 px-2.5 py-0.5 text-[11px]'
+        }`}
+      >
+        <svg width={isLg ? '14' : '10'} height={isLg ? '14' : '10'} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-ink-muted">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 6v6l4 2" />
+        </svg>
+        {currentModel.name}
+        <svg width={isLg ? '10' : '8'} height={isLg ? '10' : '8'} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="text-ink-muted">
+          <path d="M2.5 4L5 6.5L7.5 4" />
+        </svg>
+      </button>
+      {modelOpen && (
+        <div className={`absolute bottom-full left-0 mb-1 rounded-xl border border-border bg-surface-raised shadow-lg py-1 z-50 ${isLg ? 'w-60' : 'w-52'}`}>
+          {DEFAULT_LLM_MODELS.map((model) => (
+            <button
+              key={model.id}
+              type="button"
+              onClick={() => { setSelectedModel(model.id); setModelOpen(false); }}
+              className={`flex w-full items-center justify-between transition-colors ${
+                isLg ? 'px-4 py-2 text-xs' : 'px-3 py-1.5 text-[11px]'
+              } ${
+                model.id === selectedModel ? 'bg-surface-overlay text-ink font-medium' : 'text-ink-secondary hover:bg-surface-overlay/50'
+              }`}
             >
-              {machine.state || 'unknown'}
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-ink-muted">Region</span>
-            <span className="font-mono text-ink">{machine.region || '—'}</span>
-          </div>
-
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-ink-muted">Machine</span>
-            <span className="font-mono text-xs text-ink-muted">{machine.machineId?.slice(0, 12) || '—'}</span>
-          </div>
-
-          {isOwner && (
-            <div className="flex gap-2 pt-2">
-              {machine.state === 'stopped' && (
-                <button
-                  onClick={handleStart}
-                  disabled={actionLoading}
-                  className="flex-1 rounded-full bg-success/10 text-success px-3 py-1.5 text-xs font-medium hover:bg-success/15 transition-colors disabled:opacity-50"
-                >
-                  {actionLoading ? 'Starting...' : 'Start'}
-                </button>
-              )}
-              {machine.state === 'started' && (
-                <button
-                  onClick={handleStop}
-                  disabled={actionLoading}
-                  className="flex-1 rounded-full bg-danger/10 text-danger px-3 py-1.5 text-xs font-medium hover:bg-danger/15 transition-colors disabled:opacity-50"
-                >
-                  {actionLoading ? 'Stopping...' : 'Stop'}
-                </button>
-              )}
-            </div>
-          )}
+              <span>{model.name}</span>
+              <span className={`text-ink-muted ${isLg ? 'text-[11px]' : 'text-[10px]'}`}>{model.provider}</span>
+            </button>
+          ))}
         </div>
       )}
     </div>
   );
 }
+
+/* ─── Main Component ─── */
 
 interface Props {
   soulMint: string;
@@ -247,133 +632,403 @@ interface Props {
 export function AgentDetailClient({ soulMint }: Props) {
   const { user } = usePrivy();
   const { wallets } = useSolanaWallets();
+  const searchParams = useSearchParams();
   const { rpc } = useSolanaRpc();
   const { data: agentState, isLoading, error, refetch } = useAgentState(soulMint as Address);
+  const { updateExecutor } = useAgentTransactions();
+  const { sendTransaction } = useSendTransaction();
 
   const [walletBalance, setWalletBalance] = useState<bigint>(BigInt(0));
   const [agentWalletAddress, setAgentWalletAddress] = useState<string | null>(null);
+  const [machineInfo, setMachineInfo] = useState<MachineInfo | null>(null);
   const [machineState, setMachineState] = useState<string | null>(null);
 
+  const [showPanel, setShowPanel] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [deployPreset, setDeployPreset] = useState<DeployPreset>({
+    profileId: 'alpha-hunter',
+    skills: [],
+    model: null,
+  });
+
+  // Chat
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_LLM_MODELS[0].id);
+  const [modelOpen, setModelOpen] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const modelRef = useRef<HTMLDivElement>(null);
+
+  const currentModel = DEFAULT_LLM_MODELS.find((m) => m.id === selectedModel) || DEFAULT_LLM_MODELS[0];
+  const queryProfile = searchParams.get('profile');
+  const querySkills = searchParams.get('skills');
+  const queryModel = searchParams.get('model');
+
+  useEffect(() => {
+    const parseSkills = (input: string | null): string[] =>
+      (input || '')
+        .split(',')
+        .map((skill) => skill.trim())
+        .filter(Boolean);
+
+    const fromStorageRaw = localStorage.getItem(`agent-deploy-preset:${soulMint}`);
+    let fromStorage: DeployPreset | null = null;
+    if (fromStorageRaw) {
+      try {
+        const parsed = JSON.parse(fromStorageRaw);
+        fromStorage = {
+          profileId: typeof parsed.profileId === 'string' ? parsed.profileId : 'alpha-hunter',
+          skills: Array.isArray(parsed.skills)
+            ? parsed.skills.filter((v: unknown) => typeof v === 'string')
+            : [],
+          model: typeof parsed.model === 'string' ? parsed.model : null,
+        };
+      } catch {
+        fromStorage = null;
+      }
+    }
+
+    const querySkillsList = parseSkills(querySkills);
+
+    const merged: DeployPreset = {
+      profileId: queryProfile || fromStorage?.profileId || 'alpha-hunter',
+      skills: querySkillsList.length > 0 ? querySkillsList : fromStorage?.skills || [],
+      model: queryModel || fromStorage?.model || null,
+    };
+
+    setDeployPreset(merged);
+    localStorage.setItem(`agent-deploy-preset:${soulMint}`, JSON.stringify(merged));
+  }, [soulMint, queryModel, queryProfile, querySkills]);
+
+  /* Data fetching */
   const fetchBalance = useCallback(async () => {
     try {
       const [agentWallet] = await getAgentWalletPda(soulMint as Address);
       setAgentWalletAddress(agentWallet as string);
       const balance = await fetchAgentWalletBalance(rpc, agentWallet);
       setWalletBalance(balance);
-    } catch {
-      // agent may not exist yet
-    }
+    } catch { /* */ }
   }, [soulMint, rpc]);
 
+  const fetchMachine = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/agent/${soulMint}/machine`);
+      if (res.ok) {
+        const data = await res.json();
+        setMachineInfo(data);
+        setMachineState(data.deployed ? (data.state || null) : null);
+      }
+    } catch { /* */ }
+  }, [soulMint]);
+
+  useEffect(() => { fetchBalance(); }, [fetchBalance]);
   useEffect(() => {
-    fetchBalance();
-  }, [fetchBalance]);
+    fetchMachine();
+    const iv = setInterval(fetchMachine, 15_000);
+    return () => clearInterval(iv);
+  }, [fetchMachine]);
 
-  const handleRefresh = () => {
-    refetch();
-    fetchBalance();
-  };
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
-  const handleMachineUpdate = useCallback((machine: MachineInfo | null) => {
-    setMachineState(machine?.deployed ? (machine.state || null) : null);
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (modelRef.current && !modelRef.current.contains(e.target as Node)) setModelOpen(false);
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const isOwner =
-    agentState &&
-    wallets[0] &&
-    (agentState.owner as string) === wallets[0].address;
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 160) + 'px';
+    }
+  }, [input]);
 
+  const handleRefresh = () => { refetch(); fetchBalance(); fetchMachine(); };
+
+  const isOwner = agentState && wallets[0] && (agentState.owner as string) === wallets[0].address;
+  const isRunning = machineState === 'started';
+
+  /* Chat */
+  const sendMessage = async () => {
+    if (!input.trim() || chatLoading) return;
+    const userMessage = input.trim();
+    setInput('');
+    setChatError(null);
+    const newMessages: Message[] = [...messages, { role: 'user', content: userMessage }];
+    setMessages(newMessages);
+    setChatLoading(true);
+    try {
+      const res = await fetch(`/api/agent/${soulMint}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: userMessage, history: messages, model: selectedModel }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setChatError(data.error || 'Failed to get response'); return; }
+      setMessages([...newMessages, { role: 'assistant', content: data.response }]);
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  /* Machine actions */
+  const handleDeploy = async () => {
+    try {
+      const executorKeypair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+      const executorAddress = await getAddressFromPublicKey(executorKeypair.publicKey);
+      const fullKeypairBytes = await exportKeypairBytes(executorKeypair);
+      const executorSecretJson = JSON.stringify(Array.from(fullKeypairBytes));
+
+      const deployPayload = {
+        executorKeypair: executorSecretJson,
+        force: true,
+        profileId: deployPreset.profileId,
+        skills: deployPreset.skills,
+        model: deployPreset.model,
+      };
+
+      const deployRes = await fetch(`/api/agent/${soulMint}/deploy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(deployPayload),
+      });
+      if (!deployRes.ok) {
+        const deployErr = await deployRes.json();
+        throw new Error(deployErr.error || 'Deploy failed');
+      }
+
+      const ix = await updateExecutor(soulMint, executorAddress as string);
+      await sendTransaction([ix]);
+      await new Promise((r) => setTimeout(r, 2000));
+      await fetchMachine();
+    } catch (err) {
+      console.error('Deploy error:', err);
+    }
+  };
+
+  const handleMachineAction = async (action: 'start' | 'stop') => {
+    try {
+      await fetch(`/api/agent/${soulMint}/machine/${action}`, { method: 'POST' });
+      await new Promise((r) => setTimeout(r, 2000));
+      await fetchMachine();
+    } catch { /* */ }
+  };
+
+  /* ─── Loading / Error ─── */
   if (isLoading) {
     return (
-      <main className="mx-auto max-w-6xl px-6 py-10">
-        <div className="animate-pulse space-y-6">
-          <div className="h-7 w-48 bg-surface-inset rounded-lg" />
-          <div className="h-4 w-96 bg-surface-inset rounded-lg" />
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 h-64 bg-surface-inset rounded-2xl" />
-            <div className="h-64 bg-surface-inset rounded-2xl" />
-          </div>
+      <div className="flex items-center justify-center h-[calc(100dvh-3.5rem)]">
+        <div className="animate-pulse space-y-4 text-center">
+          <div className="h-4 w-32 bg-surface-inset rounded-lg mx-auto" />
+          <div className="h-3 w-48 bg-surface-inset rounded-lg mx-auto" />
         </div>
-      </main>
+      </div>
     );
   }
 
   if (error || !agentState) {
     return (
-      <main className="mx-auto max-w-6xl px-6 py-10">
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-ink mb-1">Agent</h1>
-          <p className="text-sm text-ink-muted font-mono">{soulMint}</p>
+      <div className="flex items-center justify-center h-[calc(100dvh-3.5rem)]">
+        <div className="text-center max-w-sm">
+          <div className="mb-3 inline-flex rounded-xl border border-border-light bg-surface p-3">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-ink-muted">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 8v4M12 16h.01" />
+            </svg>
+          </div>
+          <p className="text-sm font-medium text-ink mb-1">{error ? error.message : 'Agent not found'}</p>
+          <p className="text-xs text-ink-muted">This agent may not have been created yet, or the address is incorrect.</p>
         </div>
-        <div className="rounded-2xl border border-border bg-surface-raised p-10 text-center">
-          <p className="text-ink-secondary mb-2">
-            {error ? error.message : 'Agent not found'}
-          </p>
-          <p className="text-sm text-ink-muted">
-            This agent may not have been created yet, or the address is incorrect.
-          </p>
-        </div>
-      </main>
+      </div>
     );
   }
 
+  /* ─── Chat-centric layout ─── */
+  const hasMessages = messages.length > 0 || chatLoading;
+
   return (
-    <main className="mx-auto max-w-6xl px-6 py-10">
-      {/* Agent Header */}
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-ink">Agent</h1>
-            <span
-              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                agentState.isActive
-                  ? 'bg-success/10 text-success'
-                  : 'bg-surface-inset text-ink-muted'
-              }`}
-            >
-              {agentState.isActive ? 'Active' : 'Paused'}
-            </span>
+    <div className="flex h-[calc(100dvh-3.5rem)]">
+      {/* Main chat area */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Top bar */}
+        <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border-light shrink-0">
+          <Link href="/dashboard" className="rounded-lg p-1.5 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors">
+            <IconBack />
+          </Link>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className={`inline-block h-2 w-2 rounded-full shrink-0 ${agentState.isActive ? 'bg-success' : 'bg-ink-muted'}`} />
+            <span className="text-sm font-medium text-ink truncate">Agent</span>
+            <span className="text-[11px] text-ink-muted font-mono truncate hidden sm:inline">{truncateAddress(soulMint, 4)}</span>
           </div>
-          <p className="text-sm text-ink-muted font-mono mt-1">{soulMint}</p>
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={() => setShowSettings(true)}
+              className="rounded-lg p-1.5 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors"
+              title="Settings"
+            >
+              <IconSettings />
+            </button>
+            <button
+              onClick={() => setShowPanel(!showPanel)}
+              className={`rounded-lg p-1.5 transition-colors ${showPanel ? 'text-brand-500 bg-brand-500/10' : 'text-ink-muted hover:text-ink hover:bg-surface-overlay'}`}
+              title="Toggle info panel"
+            >
+              <IconPanel />
+            </button>
+          </div>
         </div>
-        <button
-          onClick={handleRefresh}
-          className="rounded-full border border-border px-4 py-1.5 text-xs font-medium text-ink-secondary hover:bg-surface-overlay transition-colors"
-        >
-          Refresh
-        </button>
+
+        {/* Chat body */}
+        {!isRunning && !hasMessages ? (
+          <div className="flex-1 flex flex-col items-center justify-center px-6">
+            <div className="text-center mb-6">
+              <h2 className="text-lg font-semibold text-ink mb-2">Agent is offline</h2>
+              <p className="text-sm text-ink-muted">Start the runtime to chat with your agent.</p>
+            </div>
+            {isOwner && (
+              <button
+                onClick={() => setShowSettings(true)}
+                className="rounded-xl bg-ink px-5 py-2.5 text-sm font-medium text-surface hover:bg-ink/90 transition-colors"
+              >
+                Open Settings
+              </button>
+            )}
+          </div>
+        ) : !hasMessages ? (
+          <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
+            <h2 className="text-2xl font-semibold text-ink mb-10">What should your agent do?</h2>
+            <div className="w-full max-w-2xl">
+              <div className="rounded-2xl border border-border bg-surface-raised shadow-sm">
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                  placeholder="Ask anything..."
+                  rows={1}
+                  className="w-full resize-none bg-transparent px-5 pt-5 pb-2 text-base text-ink placeholder:text-ink-muted focus:outline-none"
+                />
+                <div className="flex items-center justify-between px-4 pb-3.5">
+                  <ModelSelector
+                    modelRef={modelRef}
+                    modelOpen={modelOpen}
+                    setModelOpen={setModelOpen}
+                    currentModel={currentModel}
+                    selectedModel={selectedModel}
+                    setSelectedModel={setSelectedModel}
+                    size="lg"
+                  />
+                  <button type="button" onClick={sendMessage} disabled={!input.trim()} className="rounded-full p-2 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors disabled:opacity-30">
+                    <IconSend />
+                  </button>
+                </div>
+              </div>
+            </div>
+            {chatError && <div className="mt-4 text-xs text-danger bg-danger/5 rounded-xl px-3 py-2">{chatError}</div>}
+          </div>
+        ) : (
+          <>
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto px-4 py-6">
+              <div className="max-w-2xl mx-auto space-y-5">
+                {messages.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[80%] rounded-2xl px-5 py-3 text-[15px] leading-relaxed ${
+                      msg.role === 'user'
+                        ? 'bg-ink text-surface rounded-br-md'
+                        : 'bg-surface-raised border border-border-light text-ink rounded-bl-md'
+                    }`}>
+                      <div className="whitespace-pre-wrap">{msg.content}</div>
+                    </div>
+                  </div>
+                ))}
+                {chatLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-surface-raised border border-border-light rounded-2xl rounded-bl-md px-5 py-3 text-[15px] text-ink-muted">
+                      <span className="inline-flex gap-1">
+                        <span className="animate-bounce" style={{ animationDelay: '0ms' }}>.</span>
+                        <span className="animate-bounce" style={{ animationDelay: '150ms' }}>.</span>
+                        <span className="animate-bounce" style={{ animationDelay: '300ms' }}>.</span>
+                      </span>
+                    </div>
+                  </div>
+                )}
+                {chatError && <div className="text-center text-xs text-danger bg-danger/5 rounded-xl px-3 py-2">{chatError}</div>}
+                <div ref={messagesEndRef} />
+              </div>
+            </div>
+
+            {/* Bottom input */}
+            <div className="shrink-0 border-t border-border-light px-4 py-3">
+              <div className="max-w-2xl mx-auto">
+                <div className="rounded-2xl border border-border bg-surface-raised">
+                  <textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                    placeholder="Message your agent..."
+                    disabled={chatLoading}
+                    rows={1}
+                    className="w-full resize-none bg-transparent px-5 pt-4 pb-1.5 text-base text-ink placeholder:text-ink-muted focus:outline-none disabled:opacity-50"
+                  />
+                  <div className="flex items-center justify-between px-4 pb-3">
+                    <ModelSelector
+                      modelRef={modelRef}
+                      modelOpen={modelOpen}
+                      setModelOpen={setModelOpen}
+                      currentModel={currentModel}
+                      selectedModel={selectedModel}
+                      setSelectedModel={setSelectedModel}
+                    />
+                    <button type="button" onClick={sendMessage} disabled={chatLoading || !input.trim()} className="rounded-full p-1.5 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors disabled:opacity-30">
+                      <IconSend />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left column: Chat + Config + Activity */}
-        <div className="lg:col-span-2 space-y-6">
-          <AgentChat soulMint={soulMint} isRunning={machineState === 'started'} />
-          <AgentConfig
-            soulMint={soulMint}
+      {/* Right info panel */}
+      {showPanel && (
+        <div className="w-72 border-l border-border-light bg-surface shrink-0 hidden md:block">
+          <InfoPanel
             agentState={agentState}
-            isOwner={!!isOwner}
-            onSuccess={handleRefresh}
+            walletBalance={walletBalance}
+            agentWalletAddress={agentWalletAddress}
+            machineState={machineState}
+            soulMint={soulMint}
           />
-          <ActivityLog agentId={soulMint} />
         </div>
+      )}
 
-        {/* Right column: Runtime + Epoch + Stats + Wallet */}
-        <div className="space-y-6">
-          <MachineStatus
-            soulMint={soulMint}
-            isOwner={!!isOwner}
-            onMachineUpdate={handleMachineUpdate}
-          />
-          <EpochStatus agentWallet={agentWalletAddress || undefined} />
-          <AgentStats agentState={agentState} />
-          <FundWithdraw
-            soulMint={soulMint}
-            balance={walletBalance}
-            isOwner={!!isOwner}
-            onSuccess={handleRefresh}
-          />
-        </div>
-      </div>
-    </main>
+      {/* Settings drawer */}
+      {showSettings && (
+        <SettingsModal
+          soulMint={soulMint}
+          agentState={agentState}
+          isOwner={!!isOwner}
+          walletBalance={walletBalance}
+          machineState={machineState}
+          machineInfo={machineInfo}
+          onRefresh={handleRefresh}
+          onClose={() => setShowSettings(false)}
+          onDeploy={handleDeploy}
+          onMachineAction={handleMachineAction}
+        />
+      )}
+    </div>
   );
 }

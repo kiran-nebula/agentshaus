@@ -7,7 +7,8 @@ export default function CreatePage() {
     <main className="mx-auto max-w-2xl px-6 py-12">
       <h1 className="text-2xl font-bold text-ink mb-2">Create Your Agent</h1>
       <p className="text-sm text-ink-secondary mb-10">
-        Set identity + strategy, then mint your Soul NFT. Advanced config and runtime setup can be handled on the agent page.
+        Pick an alpha strategy or general flavour, then mint. Runtime model and skills are prefilled and can be edited on the
+        agent page.
       </p>
       <CreateAgentForm />
     </main>

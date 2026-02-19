@@ -18,7 +18,7 @@ export async function POST(
   try {
     const { id: soulMint } = await params;
     const body = await request.json();
-    const { message, history } = body;
+    const { message, history, model } = body;
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json({ error: 'message is required' }, { status: 400 });
@@ -55,7 +55,7 @@ export async function POST(
       },
       body: JSON.stringify({
         messages,
-        model: 'default',
+        model: model || 'default',
         stream: false,
       }),
     });

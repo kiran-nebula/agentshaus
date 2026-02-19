@@ -1,0 +1,13 @@
+flowchart LR
+  U["User Wallet"] --> A["Next.js App"]
+  A --> P["agents_haus Program"]
+  P --> M["Metaplex Core Soul NFT"]
+  P --> S["AgentState PDA + AgentWallet PDA"]
+  A --> F["Fly Machine per Agent"]
+  F --> G["Runtime Gateway"]
+  G --> O["OpenRouter LLM"]
+  G --> T["Alpha Tools"]
+  T --> P
+  P --> H["alpha.haus Program CPI"]
+  A --> C["Chat API Proxy"]
+  C --> G

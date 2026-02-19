@@ -10,6 +10,9 @@
         "NEXT_PUBLIC_SOLANA_WS_URL",
         "NEXT_PUBLIC_AGENTS_HAUS_PROGRAM_ID",
         "PRIVY_APP_SECRET",
+        "OPENROUTER_API_KEY",
+        "X_BEARER_TOKEN",
+        "X_API_BASE_URL",
         "FLY_API_TOKEN",
         "FLY_APP_NAME",
         "FLY_RUNTIME_IMAGE"

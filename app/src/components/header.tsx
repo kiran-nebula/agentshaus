@@ -21,6 +21,12 @@ export function Header() {
           >
             Create
           </Link>
+          <Link
+            href="/skills"
+            className="text-sm font-medium text-ink-secondary hover:text-ink transition-colors"
+          >
+            Skills
+          </Link>
           <WalletButton />
         </nav>
       </div>

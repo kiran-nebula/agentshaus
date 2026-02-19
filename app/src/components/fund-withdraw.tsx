@@ -108,10 +108,10 @@ export function FundWithdraw({ soulMint, balance, isOwner, onSuccess }: Props) {
             <button
               onClick={handleAction}
               disabled={loading}
-              className={`flex-1 rounded-full px-4 py-2 text-sm font-medium text-white transition-colors disabled:opacity-50 ${
+              className={`flex-1 rounded-full px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
                 mode === 'fund'
-                  ? 'bg-ink hover:bg-ink/90'
-                  : 'bg-brand-500 hover:bg-brand-600'
+                  ? 'bg-ink text-surface hover:bg-ink/90'
+                  : 'bg-brand-500 text-black hover:bg-brand-600'
               }`}
             >
               {loading

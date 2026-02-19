@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { STRATEGY_LABELS, type Strategy, formatSol } from '@agents-haus/common';
 
@@ -11,6 +12,7 @@ interface AgentCardProps {
   totalTips: bigint;
   totalBurns: bigint;
   balance: bigint;
+  executor: string;
 }
 
 export function AgentCard({
@@ -21,37 +23,70 @@ export function AgentCard({
   totalTips,
   totalBurns,
   balance,
+  executor,
 }: AgentCardProps) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyExecutor = async (
+    event: React.MouseEvent<HTMLButtonElement>,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    try {
+      await navigator.clipboard.writeText(executor);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Ignore clipboard failures silently.
+    }
+  };
+
   return (
     <Link href={`/agent/${soulMint}`}>
-      <div className="rounded-2xl border border-border bg-surface-raised p-6 hover:shadow-sm hover:border-ink/20 transition-all cursor-pointer">
+      <div className="group rounded-2xl border border-border bg-surface-raised p-5 hover:border-brand-500/30 hover:shadow-sm transition-all cursor-pointer">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-base font-semibold text-ink">{name}</h3>
+          <h3 className="text-sm font-semibold text-ink">{name}</h3>
           <span
-            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
               isActive
                 ? 'bg-success/10 text-success'
                 : 'bg-surface-inset text-ink-muted'
             }`}
           >
+            <span className={`inline-block h-1.5 w-1.5 rounded-full ${isActive ? 'bg-success' : 'bg-ink-muted'}`} />
             {isActive ? 'Active' : 'Paused'}
           </span>
         </div>
 
-        <div className="text-sm text-ink-secondary mb-4">{STRATEGY_LABELS[strategy]}</div>
+        <div className="text-xs text-ink-secondary mb-4">{STRATEGY_LABELS[strategy]}</div>
 
-        <div className="grid grid-cols-3 gap-4 text-sm border-t border-border-light pt-4">
+        <div className="mb-4 rounded-lg border border-border-light bg-surface px-3 py-2">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-ink-muted text-[11px]">Executor</span>
+            <button
+              type="button"
+              onClick={handleCopyExecutor}
+              className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors"
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <div className="font-mono text-[11px] text-ink truncate">{executor}</div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3 text-xs border-t border-border-light pt-3">
           <div>
-            <div className="text-ink-muted text-xs">Tips</div>
-            <div className="font-medium text-ink mt-0.5">{totalTips.toString()}</div>
+            <div className="text-ink-muted text-[11px] mb-0.5">Tips</div>
+            <div className="font-medium text-ink">{totalTips.toString()}</div>
           </div>
           <div>
-            <div className="text-ink-muted text-xs">Burns</div>
-            <div className="font-medium text-ink mt-0.5">{totalBurns.toString()}</div>
+            <div className="text-ink-muted text-[11px] mb-0.5">Burns</div>
+            <div className="font-medium text-ink">{totalBurns.toString()}</div>
           </div>
           <div>
-            <div className="text-ink-muted text-xs">Balance</div>
-            <div className="font-medium font-mono text-ink mt-0.5">{formatSol(balance)}</div>
+            <div className="text-ink-muted text-[11px] mb-0.5">Balance</div>
+            <div className="font-medium font-mono text-ink">{formatSol(balance)}</div>
           </div>
         </div>
       </div>

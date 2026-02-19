@@ -19,6 +19,13 @@ const REQUIRED_ENV_VARS = [
   'SOUL_MINT_ADDRESS',
 ];
 
+function parseCsvEnv(value: string | undefined): string[] {
+  return (value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function validateEnv(): void {
   const missing = REQUIRED_ENV_VARS.filter((key) => !process.env[key]);
   if (missing.length > 0) {
@@ -48,11 +55,19 @@ async function main() {
 
   const strategyLabel =
     STRATEGY_LABELS[agentState.strategy as Strategy] || `Unknown(${agentState.strategy})`;
+  const profileId = (process.env.AGENT_PROFILE_ID || 'alpha-hunter').trim();
+  const configuredSkills = parseCsvEnv(process.env.AGENT_SKILLS);
+  const explicitSkills = new Set(configuredSkills);
+  const alphaHausEnabled =
+    explicitSkills.size === 0 || explicitSkills.has('alpha-haus');
 
   console.log('---');
   console.log(`Soul Mint:  ${soulMint}`);
   console.log(`Executor:   ${executor}`);
   console.log(`Strategy:   ${strategyLabel}`);
+  console.log(`Profile:    ${profileId}`);
+  console.log(`Skills:     ${configuredSkills.join(',') || 'alpha-haus (default)'}`);
+  console.log(`Model:      ${(process.env.AGENT_MODEL || 'moonshotai/kimi-k2.5').trim()}`);
   console.log(`Active:     ${agentState.isActive}`);
   console.log(`Version:    ${agentState.agentVersion}`);
   console.log('---');
@@ -61,30 +76,30 @@ async function main() {
     console.warn('Agent is paused. Waiting for activation...');
   }
 
-  // Heartbeat: check epoch state periodically
-  const HEARTBEAT_INTERVAL_MS = 60_000; // 60 seconds
+  if (alphaHausEnabled) {
+    // Heartbeat: check epoch state periodically for alpha.haus agents.
+    const HEARTBEAT_INTERVAL_MS = 60_000;
 
-  async function heartbeat() {
-    try {
-      const { checkEpochState } = await import(
-        '../workspace/skills/alpha-haus/tools/check_epoch_state'
-      );
-      const state = await checkEpochState();
-      console.log(
-        `[heartbeat] epoch=${state.epoch} alpha=${state.agentIsAlpha} burner=${state.agentIsBurner} tipped=${state.agentHasTipped}`,
-      );
-    } catch (err) {
-      console.error('[heartbeat] error:', err);
+    async function heartbeat() {
+      try {
+        const { checkEpochState } = await import(
+          '../workspace/skills/alpha-haus/tools/check_epoch_state'
+        );
+        const state = await checkEpochState();
+        console.log(
+          `[heartbeat] epoch=${state.epoch} alpha=${state.agentIsAlpha} burner=${state.agentIsBurner} tipped=${state.agentHasTipped}`,
+        );
+      } catch (err) {
+        console.error('[heartbeat] error:', err);
+      }
     }
+
+    await heartbeat();
+    setInterval(heartbeat, HEARTBEAT_INTERVAL_MS);
+    console.log(`Heartbeat running every ${HEARTBEAT_INTERVAL_MS / 1000}s`);
+  } else {
+    console.log('Heartbeat disabled (alpha-haus skill not enabled).');
   }
-
-  // Run initial heartbeat
-  await heartbeat();
-
-  // Schedule periodic heartbeat
-  setInterval(heartbeat, HEARTBEAT_INTERVAL_MS);
-
-  console.log(`Heartbeat running every ${HEARTBEAT_INTERVAL_MS / 1000}s`);
 
   // Start the chat gateway HTTP server
   startGateway();

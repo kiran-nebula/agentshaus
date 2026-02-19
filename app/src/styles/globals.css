@@ -1,38 +1,144 @@
 @import 'tailwindcss';
 
 @theme {
-  /* Warm cream palette inspired by MoreMarkets */
-  --color-surface: #f5f1ea;
+  /* Default theme: HAUS Green (accent-forward, neutral surfaces) */
+  --color-surface: #f6f7f3;
   --color-surface-raised: #ffffff;
-  --color-surface-overlay: #ece7dd;
-  --color-surface-inset: #eae5db;
+  --color-surface-overlay: #eef1e8;
+  --color-surface-inset: #eaeee3;
 
   /* Text */
-  --color-ink: #1a1814;
-  --color-ink-secondary: #6b6354;
-  --color-ink-muted: #9e9585;
+  --color-ink: #161a13;
+  --color-ink-secondary: #4e5742;
+  --color-ink-muted: #778167;
 
-  /* Accent — warm orange-red */
-  --color-brand-500: #dd400f;
-  --color-brand-600: #c4370d;
-  --color-brand-700: #a82e0b;
+  /* HAUS brand accent */
+  --color-brand-500: #a5ef41;
+  --color-brand-600: #8fd533;
+  --color-brand-700: #75b927;
 
   /* Functional */
-  --color-success: #16a34a;
-  --color-warning: #d97706;
-  --color-danger: #dc2626;
+  --color-success: #24b25d;
+  --color-warning: #c98210;
+  --color-danger: #cf3f3f;
 
   /* Borders */
-  --color-border: #d8d2c6;
-  --color-border-light: #e8e3d9;
+  --color-border: #d7dfc8;
+  --color-border-light: #e4ead9;
 }
 
 @layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  :root[data-theme='original'] {
+    --color-surface: #f5f1ea;
+    --color-surface-raised: #ffffff;
+    --color-surface-overlay: #ece7dd;
+    --color-surface-inset: #eae5db;
+
+    --color-ink: #1a1814;
+    --color-ink-secondary: #6b6354;
+    --color-ink-muted: #9e9585;
+
+    --color-brand-500: #dd6b20;
+    --color-brand-600: #c4570d;
+    --color-brand-700: #a84a0b;
+
+    --color-success: #16a34a;
+    --color-warning: #d97706;
+    --color-danger: #dc2626;
+
+    --color-border: #d8d2c6;
+    --color-border-light: #e8e3d9;
+  }
+
+  :root[data-theme='graphite'] {
+    --color-surface: #f4f6f8;
+    --color-surface-raised: #ffffff;
+    --color-surface-overlay: #e9edf2;
+    --color-surface-inset: #e4e9ef;
+
+    --color-ink: #131a23;
+    --color-ink-secondary: #495769;
+    --color-ink-muted: #748094;
+
+    --color-brand-500: #3b82f6;
+    --color-brand-600: #2563eb;
+    --color-brand-700: #1d4ed8;
+
+    --color-success: #16a34a;
+    --color-warning: #d97706;
+    --color-danger: #dc2626;
+
+    --color-border: #d2dbe5;
+    --color-border-light: #e1e8ef;
+  }
+
   body {
     @apply bg-surface text-ink;
   }
 
   ::selection {
-    background-color: rgba(221, 64, 15, 0.15);
+    background-color: color-mix(in srgb, var(--color-brand-500) 26%, transparent);
   }
+
+  /* Smooth scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-ink-muted);
+  }
+}
+
+/* Settings modal animation */
+@keyframes modal-in {
+  from {
+    transform: scale(0.97);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.settings-modal-enter {
+  animation: modal-in 0.2s ease-out;
+}
+
+.agents-dashboard-hero {
+  background: var(--color-surface);
+}
+
+.agents-dashboard-content {
+  background: var(--color-surface);
+}
+
+:root[data-theme='haus-green'] .agents-dashboard-hero {
+  background:
+    radial-gradient(900px 260px at 8% -30%, color-mix(in srgb, var(--color-brand-500) 34%, white), transparent 62%),
+    radial-gradient(850px 240px at 88% 0%, color-mix(in srgb, var(--color-brand-500) 24%, white), transparent 64%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-brand-500) 22%, white) 0%,
+      color-mix(in srgb, var(--color-brand-500) 10%, white) 58%,
+      #ffffff 100%
+    );
+}
+
+:root[data-theme='haus-green'] .agents-dashboard-content {
+  background: #ffffff;
 }

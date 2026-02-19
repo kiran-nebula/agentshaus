@@ -48,10 +48,26 @@ export async function POST(
 
     // 2. Parse request body
     const body = await request.json();
-    const { executorKeypair, force } = body;
+    const { executorKeypair, force, profileId, skills, model } = body;
     if (!executorKeypair) {
       return NextResponse.json({ error: 'executorKeypair is required' }, { status: 400 });
     }
+
+    const normalizedProfileId =
+      typeof profileId === 'string' && profileId.trim()
+        ? profileId.trim().slice(0, 64)
+        : 'alpha-hunter';
+    const normalizedSkills = Array.isArray(skills)
+      ? skills
+          .filter((value): value is string => typeof value === 'string')
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .slice(0, 16)
+      : [];
+    const normalizedModel =
+      typeof model === 'string' && model.trim()
+        ? model.trim().slice(0, 120)
+        : '';
 
     // 3. Check if machine already exists
     const fly = getFlyClient();
@@ -103,6 +119,11 @@ export async function POST(
         AGENTS_HAUS_PROGRAM_ID:
           (process.env.NEXT_PUBLIC_AGENTS_HAUS_PROGRAM_ID || 'BWFsJXqoXKg53yu3VxYV9YgmvTc9BZxto4CGJqYn8aWM').trim(),
         OPENROUTER_API_KEY: (process.env.OPENROUTER_API_KEY || '').trim(),
+        X_BEARER_TOKEN: (process.env.X_BEARER_TOKEN || '').trim(),
+        X_API_BASE_URL: (process.env.X_API_BASE_URL || '').trim(),
+        AGENT_PROFILE_ID: normalizedProfileId,
+        AGENT_SKILLS: normalizedSkills.join(','),
+        AGENT_MODEL: normalizedModel,
         PORT: '3001',
       },
     });
