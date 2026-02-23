@@ -21,12 +21,24 @@ interface AgentEntry {
   state: AgentState;
   balance: bigint;
   executor: string;
+  machine: AgentMachineState;
+}
+
+interface AgentMachineState {
+  deployed: boolean;
+  state: string | null;
 }
 
 function parseAssetName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function isMachineActive(machine: AgentMachineState): boolean {
+  if (!machine.deployed || !machine.state) return false;
+  const normalized = machine.state.toLowerCase();
+  return normalized === 'started' || normalized === 'starting';
 }
 
 export default function DashboardPage() {
@@ -38,7 +50,28 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [searched, setSearched] = useState(false);
   const [searchMint, setSearchMint] = useState('');
+  const [showActiveMachinesOnly, setShowActiveMachinesOnly] = useState(false);
   const walletAddress = wallets[0]?.address as Address | undefined;
+
+  const fetchAgentMachineState = useCallback(
+    async (soulMint: string): Promise<AgentMachineState> => {
+      try {
+        const machineRes = await fetch(`/api/agent/${soulMint}/machine`, {
+          cache: 'no-store',
+        });
+
+        if (!machineRes.ok) return { deployed: false, state: null };
+        const payload = await machineRes.json();
+        return {
+          deployed: Boolean(payload?.deployed),
+          state: typeof payload?.state === 'string' ? payload.state : null,
+        };
+      } catch {
+        return { deployed: false, state: null };
+      }
+    },
+    [],
+  );
 
   const hydrateCachedNames = useCallback((mints: string[]) => {
     if (typeof window === 'undefined') return;
@@ -71,13 +104,18 @@ export default function DashboardPage() {
         // Fetch balances for each agent
         const entries: AgentEntry[] = await Promise.all(
           results.map(async ({ state }) => {
+            const soulMint = state.soulMint as string;
             const [agentWallet] = await getAgentWalletPda(state.soulMint);
-            const balance = await fetchAgentWalletBalance(rpc, agentWallet);
+            const [balance, machine] = await Promise.all([
+              fetchAgentWalletBalance(rpc, agentWallet),
+              fetchAgentMachineState(soulMint),
+            ]);
             return {
-              soulMint: state.soulMint as string,
+              soulMint,
               state,
               balance,
               executor: state.executor as string,
+              machine,
             };
           }),
         );
@@ -97,7 +135,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [authenticated, walletAddress, rpc, hydrateCachedNames]);
+  }, [authenticated, walletAddress, rpc, hydrateCachedNames, fetchAgentMachineState]);
 
   const handleSearch = useCallback(async () => {
     if (!searchMint.trim()) return;
@@ -108,7 +146,10 @@ export default function DashboardPage() {
       const state = await fetchAgentState(rpc, agentStateAddr);
       if (state) {
         const [agentWallet] = await getAgentWalletPda(mint);
-        const balance = await fetchAgentWalletBalance(rpc, agentWallet);
+        const [balance, machine] = await Promise.all([
+          fetchAgentWalletBalance(rpc, agentWallet),
+          fetchAgentMachineState(mint),
+        ]);
         const mintKey = searchMint.trim();
         setAgents((prev) => {
           if (prev.some((a) => a.soulMint === mintKey)) return prev;
@@ -119,6 +160,7 @@ export default function DashboardPage() {
               state,
               balance,
               executor: state.executor as string,
+              machine,
             },
           ];
         });
@@ -130,7 +172,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [searchMint, rpc, hydrateCachedNames]);
+  }, [searchMint, rpc, hydrateCachedNames, fetchAgentMachineState]);
 
   useEffect(() => {
     if (agents.length === 0) return;
@@ -181,6 +223,11 @@ export default function DashboardPage() {
     };
   }, [agents, agentNames]);
 
+  const activeMachineCount = agents.filter((agent) => isMachineActive(agent.machine)).length;
+  const displayedAgents = showActiveMachinesOnly
+    ? agents.filter((agent) => isMachineActive(agent.machine))
+    : agents;
+
   return (
     <main className="min-h-[calc(100dvh-56px)]">
       <section className="agents-dashboard-hero relative overflow-hidden border-b border-border-light px-10 py-8">
@@ -227,10 +274,40 @@ export default function DashboardPage() {
       </section>
 
       <section className="agents-dashboard-content px-10 py-8">
-        {/* Agent grid */}
         {agents.length > 0 && (
+          <div className="mb-5 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowActiveMachinesOnly(false)}
+              className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                !showActiveMachinesOnly
+                  ? 'bg-ink text-surface'
+                  : 'bg-surface-inset text-ink-secondary hover:bg-surface-overlay'
+              }`}
+            >
+              All NFTs
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowActiveMachinesOnly(true)}
+              className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                showActiveMachinesOnly
+                  ? 'bg-ink text-surface'
+                  : 'bg-surface-inset text-ink-secondary hover:bg-surface-overlay'
+              }`}
+            >
+              Active machines
+            </button>
+            <span className="ml-1 text-xs text-ink-muted">
+              {activeMachineCount} / {agents.length} running
+            </span>
+          </div>
+        )}
+
+        {/* Agent grid */}
+        {displayedAgents.length > 0 && (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {agents.map((agent) => (
+            {displayedAgents.map((agent) => (
               <AgentCard
                 key={agent.soulMint}
                 soulMint={agent.soulMint}
@@ -243,6 +320,15 @@ export default function DashboardPage() {
                 executor={agent.executor}
               />
             ))}
+          </div>
+        )}
+
+        {showActiveMachinesOnly && !loading && agents.length > 0 && displayedAgents.length === 0 && (
+          <div className="rounded-2xl border border-border bg-surface-raised px-6 py-10 text-center">
+            <p className="text-sm font-medium text-ink">No active machines</p>
+            <p className="mt-1 text-sm text-ink-muted">
+              None of your loaded agents currently have a running runtime.
+            </p>
           </div>
         )}
 
