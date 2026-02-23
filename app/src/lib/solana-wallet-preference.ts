@@ -16,6 +16,13 @@ function isPrivyEmbeddedWallet(wallet: SolanaWalletLike): boolean {
   return connectorType === 'embedded' || connectorType === 'embedded_imported';
 }
 
+export function getEmbeddedSolanaWallet<T extends SolanaWalletLike>(
+  wallets: readonly T[] | null | undefined,
+): T | undefined {
+  if (!wallets || wallets.length === 0) return undefined;
+  return wallets.find(isPrivyEmbeddedWallet);
+}
+
 /**
  * Prefer Privy embedded wallets when available, otherwise fall back to the first connected wallet.
  */
@@ -23,5 +30,5 @@ export function getPreferredSolanaWallet<T extends SolanaWalletLike>(
   wallets: readonly T[] | null | undefined,
 ): T | undefined {
   if (!wallets || wallets.length === 0) return undefined;
-  return wallets.find(isPrivyEmbeddedWallet) ?? wallets[0];
+  return getEmbeddedSolanaWallet(wallets) ?? wallets[0];
 }

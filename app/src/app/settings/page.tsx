@@ -5,7 +5,10 @@ import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
 import { truncateAddress } from '@agents-haus/common';
 import { useTheme } from '@/components/theme-provider';
 import { DEFAULT_THEME } from '@/lib/themes';
-import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
+import {
+  getEmbeddedSolanaWallet,
+  getPreferredSolanaWallet,
+} from '@/lib/solana-wallet-preference';
 
 const NOTIFICATION_PREFS_KEY = 'agentshaus:notification-prefs';
 
@@ -62,8 +65,10 @@ export default function SettingsPage() {
 
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [prefs, setPrefs] = useState<NotificationPrefs>(DEFAULT_NOTIFICATION_PREFS);
+  const [copiedEmbeddedWallet, setCopiedEmbeddedWallet] = useState(false);
 
   const walletAddress = getPreferredSolanaWallet(wallets)?.address || user?.wallet?.address || null;
+  const embeddedWalletAddress = getEmbeddedSolanaWallet(wallets)?.address || null;
 
   useEffect(() => {
     try {
@@ -96,6 +101,22 @@ export default function SettingsPage() {
     if (!prefsLoaded) return;
     localStorage.setItem(NOTIFICATION_PREFS_KEY, JSON.stringify(prefs));
   }, [prefs, prefsLoaded]);
+
+  useEffect(() => {
+    if (!copiedEmbeddedWallet) return;
+    const timer = window.setTimeout(() => setCopiedEmbeddedWallet(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copiedEmbeddedWallet]);
+
+  const handleCopyEmbeddedWallet = async () => {
+    if (!embeddedWalletAddress) return;
+    try {
+      await navigator.clipboard.writeText(embeddedWalletAddress);
+      setCopiedEmbeddedWallet(true);
+    } catch {
+      // Ignore clipboard failures silently.
+    }
+  };
 
   return (
     <main className="px-4 py-6 sm:px-6 sm:py-8 lg:px-10">
@@ -179,6 +200,28 @@ export default function SettingsPage() {
               <div className="text-[11px] uppercase tracking-wide text-ink-muted">Current Wallet</div>
               <div className="mt-1 font-mono text-sm text-ink">
                 {walletAddress ? truncateAddress(walletAddress, 8) : 'Not connected'}
+              </div>
+            </div>
+
+            <div className="mt-3 rounded-xl border border-border-light bg-surface px-4 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] uppercase tracking-wide text-ink-muted">
+                  Embedded Wallet (Receive SOL)
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyEmbeddedWallet}
+                  disabled={!embeddedWalletAddress}
+                  className="rounded px-1.5 py-0.5 text-[10px] font-medium text-ink-muted transition-colors hover:bg-surface-overlay hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {copiedEmbeddedWallet ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <div className="mt-1 break-all font-mono text-xs text-ink">
+                {embeddedWalletAddress || 'No embedded wallet available'}
+              </div>
+              <div className="mt-1 text-[11px] text-ink-muted">
+                Send SOL to this address to fund your embedded wallet.
               </div>
             </div>
 
