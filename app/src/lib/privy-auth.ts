@@ -20,6 +20,12 @@ export class PrivyConfigurationError extends Error {
 let privyClient: PrivyClient | null = null;
 const ownershipCache = new Map<string, number>();
 
+type UserWalletCacheEntry = {
+  expiresAt: number;
+  addresses: Set<string>;
+};
+const userWalletCache = new Map<string, UserWalletCacheEntry>();
+
 function getPrivyClient(): PrivyClient {
   if (privyClient) return privyClient;
 
@@ -75,17 +81,95 @@ function setOwnershipCache(cacheKey: string): void {
   ownershipCache.set(cacheKey, Date.now() + OWNERSHIP_CACHE_TTL_MS);
 }
 
+function getCachedUserWallets(userId: string): Set<string> | null {
+  const cached = userWalletCache.get(userId);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    userWalletCache.delete(userId);
+    return null;
+  }
+  return cached.addresses;
+}
+
+function setCachedUserWallets(userId: string, addresses: Set<string>): void {
+  if (userWalletCache.size >= OWNERSHIP_CACHE_MAX_ENTRIES) {
+    userWalletCache.clear();
+  }
+  userWalletCache.set(userId, {
+    expiresAt: Date.now() + OWNERSHIP_CACHE_TTL_MS,
+    addresses,
+  });
+}
+
+function getErrorStatus(err: unknown): number | null {
+  if (
+    err &&
+    typeof err === 'object' &&
+    'status' in err &&
+    typeof (err as { status?: unknown }).status === 'number'
+  ) {
+    return (err as { status: number }).status;
+  }
+  return null;
+}
+
+function extractWalletAddresses(user: unknown): Set<string> {
+  const addresses = new Set<string>();
+  if (!user || typeof user !== 'object') return addresses;
+
+  const candidate = user as {
+    wallet?: { address?: unknown } | null;
+    linkedAccounts?: unknown;
+  };
+  if (candidate.wallet && typeof candidate.wallet.address === 'string') {
+    const walletAddress = candidate.wallet.address.trim();
+    if (walletAddress) addresses.add(walletAddress);
+  }
+
+  if (!Array.isArray(candidate.linkedAccounts)) return addresses;
+  for (const linked of candidate.linkedAccounts) {
+    if (!linked || typeof linked !== 'object') continue;
+    const entry = linked as { type?: unknown; address?: unknown };
+    if (
+      (entry.type === 'wallet' || entry.type === 'smart_wallet') &&
+      typeof entry.address === 'string'
+    ) {
+      const linkedAddress = entry.address.trim();
+      if (linkedAddress) addresses.add(linkedAddress);
+    }
+  }
+
+  return addresses;
+}
+
 export async function isWalletLinkedToPrivyUser(
   userId: string,
   walletAddress: string,
 ): Promise<boolean> {
   const cacheKey = getOwnershipCacheKey(userId, walletAddress);
   if (isOwnershipCacheHit(cacheKey)) return true;
+  const requestedWallet = walletAddress.trim();
+  if (!requestedWallet) return false;
 
-  const user = await getPrivyClient().getUserByWalletAddress(walletAddress);
-  const matches = Boolean(user && user.id === userId);
-  if (matches) {
-    setOwnershipCache(cacheKey);
+  const cachedWallets = getCachedUserWallets(userId);
+  if (cachedWallets) {
+    const matches = cachedWallets.has(requestedWallet);
+    if (matches) setOwnershipCache(cacheKey);
+    return matches;
   }
+
+  let user: unknown;
+  try {
+    user = await getPrivyClient().getUser(userId);
+  } catch (err) {
+    const status = getErrorStatus(err);
+    if (status === 404) return false;
+    throw err;
+  }
+
+  const linkedWallets = extractWalletAddresses(user);
+  setCachedUserWallets(userId, linkedWallets);
+  const matches = linkedWallets.has(requestedWallet);
+  if (matches) setOwnershipCache(cacheKey);
   return matches;
 }
