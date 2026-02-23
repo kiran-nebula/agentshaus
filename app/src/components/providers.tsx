@@ -1,15 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { PrivyProvider } from '@privy-io/react-auth';
 import { toSolanaWalletConnectors } from '@privy-io/react-auth/solana';
 import type { ReactNode } from 'react';
 import { ThemeProvider } from './theme-provider';
 
-const solanaConnectors = toSolanaWalletConnectors();
-
 export function Providers({ children }: { children: ReactNode }) {
   const [mounted, setMounted] = useState(false);
+  const solanaConnectors = useMemo(() => toSolanaWalletConnectors(), []);
 
   useEffect(() => {
     setMounted(true);
@@ -29,6 +28,7 @@ export function Providers({ children }: { children: ReactNode }) {
         appearance: {
           showWalletLoginFirst: true,
           walletChainType: 'solana-only',
+          walletList: ['detected_solana_wallets', 'phantom', 'solflare', 'backpack'],
           theme: 'dark',
         },
         loginMethods: ['wallet', 'email', 'google'],

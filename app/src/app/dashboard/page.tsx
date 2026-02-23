@@ -23,27 +23,49 @@ interface AgentEntry {
   executor: string;
 }
 
+function parseAssetName(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 export default function DashboardPage() {
   const { authenticated, login } = usePrivy();
   const { wallets } = useSolanaWallets();
   const { rpc } = useSolanaRpc();
   const [agents, setAgents] = useState<AgentEntry[]>([]);
+  const [agentNames, setAgentNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [searched, setSearched] = useState(false);
   const [searchMint, setSearchMint] = useState('');
-  const [autoLoaded, setAutoLoaded] = useState(false);
+  const walletAddress = wallets[0]?.address as Address | undefined;
+
+  const hydrateCachedNames = useCallback((mints: string[]) => {
+    if (typeof window === 'undefined') return;
+    const fromCache: Record<string, string> = {};
+    for (const mint of mints) {
+      const cached = parseAssetName(localStorage.getItem(`agent-name:${mint}`));
+      if (cached) fromCache[mint] = cached;
+    }
+    if (Object.keys(fromCache).length === 0) return;
+    setAgentNames((prev) => ({ ...fromCache, ...prev }));
+  }, []);
 
   // Auto-load agents for the connected wallet
   useEffect(() => {
-    if (!authenticated || !wallets.length || autoLoaded) return;
+    if (!authenticated || !walletAddress) {
+      setAgents((prev) => (prev.length > 0 ? [] : prev));
+      setLoading(false);
+      return;
+    }
+    const ownerAddress = walletAddress as Address;
 
-    const walletAddress = wallets[0].address as Address;
     let cancelled = false;
 
     async function loadWalletAgents() {
       setLoading(true);
       try {
-        const results = await fetchAgentsByOwner(rpc, walletAddress);
+        const results = await fetchAgentsByOwner(rpc, ownerAddress);
         if (cancelled) return;
 
         // Fetch balances for each agent
@@ -62,7 +84,7 @@ export default function DashboardPage() {
 
         if (!cancelled) {
           setAgents(entries);
-          setAutoLoaded(true);
+          hydrateCachedNames(entries.map((entry) => entry.soulMint));
         }
       } catch (err) {
         console.error('Failed to load wallet agents:', err);
@@ -75,7 +97,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [authenticated, wallets, rpc, autoLoaded]);
+  }, [authenticated, walletAddress, rpc, hydrateCachedNames]);
 
   const handleSearch = useCallback(async () => {
     if (!searchMint.trim()) return;
@@ -87,18 +109,20 @@ export default function DashboardPage() {
       if (state) {
         const [agentWallet] = await getAgentWalletPda(mint);
         const balance = await fetchAgentWalletBalance(rpc, agentWallet);
+        const mintKey = searchMint.trim();
         setAgents((prev) => {
-          if (prev.some((a) => a.soulMint === searchMint.trim())) return prev;
+          if (prev.some((a) => a.soulMint === mintKey)) return prev;
           return [
             ...prev,
             {
-              soulMint: searchMint.trim(),
+              soulMint: mintKey,
               state,
               balance,
               executor: state.executor as string,
             },
           ];
         });
+        hydrateCachedNames([mintKey]);
       }
       setSearched(true);
     } catch (err) {
@@ -106,7 +130,56 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [searchMint, rpc]);
+  }, [searchMint, rpc, hydrateCachedNames]);
+
+  useEffect(() => {
+    if (agents.length === 0) return;
+    const unresolved = agents
+      .map((agent) => agent.soulMint)
+      .filter((mint) => !agentNames[mint]);
+    if (unresolved.length === 0) return;
+
+    let cancelled = false;
+
+    async function fetchNamesFromDas() {
+      const rpcUrl = (process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com').trim();
+
+      for (const mint of unresolved) {
+        if (cancelled) return;
+        try {
+          const res = await fetch(rpcUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: `get-asset-${mint}`,
+              method: 'getAsset',
+              params: [mint],
+            }),
+          });
+          if (!res.ok) continue;
+
+          const payload = await res.json();
+          const resolvedName = parseAssetName(payload?.result?.content?.metadata?.name);
+          if (!resolvedName || cancelled) continue;
+
+          setAgentNames((prev) =>
+            prev[mint] === resolvedName ? prev : { ...prev, [mint]: resolvedName },
+          );
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(`agent-name:${mint}`, resolvedName);
+          }
+        } catch {
+          // Ignore unsupported RPC methods and fall back to mint label.
+        }
+      }
+    }
+
+    fetchNamesFromDas();
+    return () => {
+      cancelled = true;
+    };
+  }, [agents, agentNames]);
 
   return (
     <main className="min-h-[calc(100dvh-56px)]">
@@ -161,7 +234,7 @@ export default function DashboardPage() {
               <AgentCard
                 key={agent.soulMint}
                 soulMint={agent.soulMint}
-                name={`Agent ${agent.soulMint.slice(0, 6)}`}
+                name={agentNames[agent.soulMint] || `Agent ${agent.soulMint.slice(0, 6)}`}
                 strategy={agent.state.strategy as any}
                 isActive={agent.state.isActive}
                 totalTips={agent.state.totalTips}

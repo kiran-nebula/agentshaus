@@ -18,6 +18,7 @@ export interface FlyMachine {
       cpus: number;
       memory_mb: number;
     };
+    [key: string]: unknown;
   };
   created_at: string;
   updated_at: string;
@@ -57,7 +58,9 @@ export class FlyMachinesClient {
     cpus?: number;
     memoryMb?: number;
   }): Promise<FlyMachine> {
-    return this.request<FlyMachine>('/machines', {
+    // Explicitly request launch on create. Recent Fly API behavior can default
+    // new machines to `created` (not runnable via /start) unless skip_launch is false.
+    return this.request<FlyMachine>('/machines?skip_launch=false', {
       method: 'POST',
       body: JSON.stringify({
         name: opts.name,
@@ -97,7 +100,34 @@ export class FlyMachinesClient {
   }
 
   async startMachine(machineId: string): Promise<void> {
-    await this.request(`/machines/${machineId}/start`, { method: 'POST' });
+    try {
+      await this.request(`/machines/${machineId}/start`, { method: 'POST' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Newer Fly behavior can return machines in `created`, where /start fails but /restart succeeds.
+      if (message.includes("unable to start machine from current state: 'created'")) {
+        try {
+          await this.request(`/machines/${machineId}/restart`, { method: 'POST' });
+          return;
+        } catch {
+          // Fall through to no-op update fallback below.
+        }
+
+        // Last-resort fallback: perform a no-op machine update with the existing config.
+        // This mirrors `flyctl machine update` behavior that can transition `created` -> `started`.
+        const machine = await this.getMachine(machineId);
+        await this.request(`/machines/${machineId}?skip_health_checks=true`, {
+          method: 'POST',
+          body: JSON.stringify({ config: machine.config }),
+        });
+        return;
+      }
+      throw err;
+    }
+  }
+
+  async restartMachine(machineId: string): Promise<void> {
+    await this.request(`/machines/${machineId}/restart`, { method: 'POST' });
   }
 
   async stopMachine(machineId: string): Promise<void> {
@@ -111,12 +141,17 @@ export class FlyMachinesClient {
 
   /**
    * Find the machine for a given agent soul mint address.
-   * Machines are named `agent-{soulMint.slice(0,12)}`.
+   * Prefer exact SOUL_MINT_ADDRESS env match, then fall back to name prefix.
    */
   async findMachineForAgent(soulMint: string): Promise<FlyMachine | null> {
     const machines = await this.listMachines();
+    const exactEnvMatch = machines.find(
+      (machine) => machine.config?.env?.SOUL_MINT_ADDRESS === soulMint,
+    );
+    if (exactEnvMatch) return exactEnvMatch;
+
     const prefix = `agent-${soulMint.slice(0, 12)}`;
-    return machines.find((m) => m.name === prefix) || null;
+    return machines.find((machine) => machine.name === prefix) || null;
   }
 }
 

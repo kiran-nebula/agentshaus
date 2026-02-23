@@ -22,6 +22,7 @@ export async function checkMyPosition() {
     const soulMint = getSoulMint();
     const executorAddress = await getExecutorAddress();
     const [agentWallet] = await getAgentWalletPda(soulMint);
+    const alphaTipWallet = agentWallet;
     const [agentStateAddress] = await getAgentStatePda(soulMint);
 
     // Fetch agent state from on-chain
@@ -32,10 +33,25 @@ export async function checkMyPosition() {
       };
     }
 
-    // Fetch wallet balance
-    const walletBalance = await fetchAgentWalletBalance(rpc, agentWallet);
+    // Fetch wallet balances
+    const walletBalance = await fetchAgentWalletBalance(rpc, alphaTipWallet);
+    const burnWalletBalance = await fetchAgentWalletBalance(rpc, agentWallet);
     const executorBalanceResp = await rpc.getBalance(executorAddress).send();
     const executorBalance = BigInt(executorBalanceResp.value);
+    const tipWalletBalanceSol = lamportsToSol(walletBalance).toFixed(4);
+    const burnWalletBalanceSol = lamportsToSol(burnWalletBalance).toFixed(4);
+    const executorBalanceSol = lamportsToSol(executorBalance).toFixed(6);
+    const spendingWallets = {
+      postMode: 'cpi',
+      tipWallet: alphaTipWallet as string,
+      tipWalletBalanceSol,
+      burnWallet: agentWallet as string,
+      burnWalletBalanceSol,
+      executorFeeWallet: executorAddress as string,
+      executorFeeWalletBalanceSol: executorBalanceSol,
+      note:
+        'ALPHA_POST_MODE=cpi: SOL tips and token burns spend from agent wallet. Executor wallet only covers transaction fees.',
+    };
 
     // Fetch current epoch
     const epochResult = await findCurrentEpochStatus(rpc);
@@ -55,26 +71,25 @@ export async function checkMyPosition() {
         currentEpoch: null,
         currentTopAlphaAmount: 0,
         currentTopBurnAmount: 0,
-        walletBalance: lamportsToSol(walletBalance).toFixed(4),
+        walletBalance: tipWalletBalanceSol,
+        postMode: 'cpi',
+        alphaTipWallet: alphaTipWallet as string,
         executorWallet: executorAddress as string,
-        executorBalance: lamportsToSol(executorBalance).toFixed(6),
+        executorBalance: executorBalanceSol,
+        agentWalletBalance: burnWalletBalanceSol,
+        spendingWallets,
         error: 'No active epoch found',
       };
     }
 
     const { status } = epochResult;
     const isTopAlpha =
-      status.topAlpha !== null &&
-      (status.topAlpha === agentWallet || status.topAlpha === executorAddress);
+      status.topAlpha !== null && status.topAlpha === alphaTipWallet;
     const isTopBurner =
       status.topBurner !== null && status.topBurner === agentWallet;
 
-    const topAlphaHeldBy =
-      status.topAlpha === agentWallet
-        ? 'agent_wallet'
-        : status.topAlpha === executorAddress
-          ? 'executor_wallet'
-          : null;
+    const topAlphaHeldBy = status.topAlpha === alphaTipWallet ? 'tip_wallet' : null;
+    const legacyTopAlphaByExecutor = status.topAlpha === executorAddress;
 
     // Estimate rewards:
     // TOP ALPHA gets ~20% of epoch token emissions
@@ -112,10 +127,16 @@ export async function checkMyPosition() {
       flipAlphaCostSol: lamportsToSol(flipAlphaCost).toFixed(4),
       flipBurnCostTokens: Number(flipBurnCost) / 1_000_000,
       estimatedRewards: estimatedRewardDesc,
-      walletBalance: lamportsToSol(walletBalance).toFixed(4),
+      walletBalance: tipWalletBalanceSol,
+      postMode: 'cpi',
+      tipWallet: alphaTipWallet as string,
+      alphaTipWallet: alphaTipWallet as string,
       executorWallet: executorAddress as string,
-      executorBalance: lamportsToSol(executorBalance).toFixed(6),
+      executorBalance: executorBalanceSol,
+      agentWalletBalance: burnWalletBalanceSol,
+      spendingWallets,
       topAlphaHeldBy,
+      legacyTopAlphaByExecutor,
     };
   } catch (err) {
     return {

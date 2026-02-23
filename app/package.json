@@ -7,12 +7,15 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "smoke:mainnet": "node scripts/mainnet-smoke.mjs"
+    "smoke:mainnet": "node scripts/mainnet-smoke.mjs",
+    "agent:run": "node scripts/agent-scheduler.mjs",
+    "agent:cron": "node scripts/agent-cron.mjs"
   },
   "dependencies": {
     "@agents-haus/common": "workspace:*",
     "@agents-haus/sdk": "workspace:*",
     "@privy-io/react-auth": "^2.5.0",
+    "@vercel/blob": "^0.27.0",
     "@solana/kit": "^2.1.0",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",

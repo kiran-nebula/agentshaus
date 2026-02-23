@@ -2,15 +2,15 @@
 
 @theme {
   /* Default theme: HAUS Green (accent-forward, neutral surfaces) */
-  --color-surface: #f6f7f3;
-  --color-surface-raised: #ffffff;
-  --color-surface-overlay: #eef1e8;
-  --color-surface-inset: #eaeee3;
+  --color-surface: #e9ede4;
+  --color-surface-raised: #f6f8f2;
+  --color-surface-overlay: #e1e7db;
+  --color-surface-inset: #d8dfd0;
 
   /* Text */
-  --color-ink: #161a13;
-  --color-ink-secondary: #4e5742;
-  --color-ink-muted: #778167;
+  --color-ink: #151b11;
+  --color-ink-secondary: #3f4736;
+  --color-ink-muted: #5f6855;
 
   /* HAUS brand accent */
   --color-brand-500: #a5ef41;
@@ -23,8 +23,8 @@
   --color-danger: #cf3f3f;
 
   /* Borders */
-  --color-border: #d7dfc8;
-  --color-border-light: #e4ead9;
+  --color-border: #bcc7b0;
+  --color-border-light: #cfd8c3;
 }
 
 @layer base {
@@ -120,25 +120,29 @@
 }
 
 .agents-dashboard-hero {
-  background: var(--color-surface);
-}
-
-.agents-dashboard-content {
-  background: var(--color-surface);
-}
-
-:root[data-theme='haus-green'] .agents-dashboard-hero {
   background:
-    radial-gradient(900px 260px at 8% -30%, color-mix(in srgb, var(--color-brand-500) 34%, white), transparent 62%),
-    radial-gradient(850px 240px at 88% 0%, color-mix(in srgb, var(--color-brand-500) 24%, white), transparent 64%),
+    radial-gradient(
+      920px 280px at 8% -30%,
+      color-mix(in srgb, var(--color-brand-500) 28%, var(--color-surface-raised)),
+      transparent 62%
+    ),
+    radial-gradient(
+      840px 250px at 88% 0%,
+      color-mix(in srgb, var(--color-brand-500) 18%, var(--color-surface-raised)),
+      transparent 64%
+    ),
     linear-gradient(
       180deg,
-      color-mix(in srgb, var(--color-brand-500) 22%, white) 0%,
-      color-mix(in srgb, var(--color-brand-500) 10%, white) 58%,
-      #ffffff 100%
+      color-mix(in srgb, var(--color-brand-500) 16%, var(--color-surface-raised)) 0%,
+      color-mix(in srgb, var(--color-brand-500) 7%, var(--color-surface)) 58%,
+      var(--color-surface-raised) 100%
     );
 }
 
-:root[data-theme='haus-green'] .agents-dashboard-content {
-  background: #ffffff;
+.agents-dashboard-content {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-brand-500) 5%, var(--color-surface-raised)) 0%,
+    var(--color-surface-raised) 18%
+  );
 }

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { STRATEGY_LABELS, type Strategy, formatSol } from '@agents-haus/common';
+import { STRATEGY_LABELS, type Strategy, formatSol, truncateAddress } from '@agents-haus/common';
 
 interface AgentCardProps {
   soulMint: string;
@@ -26,6 +26,8 @@ export function AgentCard({
   executor,
 }: AgentCardProps) {
   const [copied, setCopied] = useState(false);
+  const hasActivity =
+    totalTips > BigInt(0) || totalBurns > BigInt(0) || balance > BigInt(0);
 
   const handleCopyExecutor = async (
     event: React.MouseEvent<HTMLButtonElement>,
@@ -59,6 +61,7 @@ export function AgentCard({
           </span>
         </div>
 
+        <div className="mb-2 font-mono text-[11px] text-ink-muted">{truncateAddress(soulMint, 6)}</div>
         <div className="text-xs text-ink-secondary mb-4">{STRATEGY_LABELS[strategy]}</div>
 
         <div className="mb-4 rounded-lg border border-border-light bg-surface px-3 py-2">
@@ -75,20 +78,26 @@ export function AgentCard({
           <div className="font-mono text-[11px] text-ink truncate">{executor}</div>
         </div>
 
-        <div className="grid grid-cols-3 gap-3 text-xs border-t border-border-light pt-3">
-          <div>
-            <div className="text-ink-muted text-[11px] mb-0.5">Tips</div>
-            <div className="font-medium text-ink">{totalTips.toString()}</div>
+        {hasActivity ? (
+          <div className="grid grid-cols-3 gap-3 text-xs border-t border-border-light pt-3">
+            <div>
+              <div className="text-ink-muted text-[11px] mb-0.5">Tips</div>
+              <div className="font-medium text-ink">{totalTips.toString()}</div>
+            </div>
+            <div>
+              <div className="text-ink-muted text-[11px] mb-0.5">Burns</div>
+              <div className="font-medium text-ink">{totalBurns.toString()}</div>
+            </div>
+            <div>
+              <div className="text-ink-muted text-[11px] mb-0.5">Balance</div>
+              <div className="font-medium font-mono text-ink">{formatSol(balance)}</div>
+            </div>
           </div>
-          <div>
-            <div className="text-ink-muted text-[11px] mb-0.5">Burns</div>
-            <div className="font-medium text-ink">{totalBurns.toString()}</div>
+        ) : (
+          <div className="rounded-lg border border-border-light bg-surface px-3 py-2 text-xs text-ink-muted">
+            No activity yet
           </div>
-          <div>
-            <div className="text-ink-muted text-[11px] mb-0.5">Balance</div>
-            <div className="font-medium font-mono text-ink">{formatSol(balance)}</div>
-          </div>
-        </div>
+        )}
       </div>
     </Link>
   );

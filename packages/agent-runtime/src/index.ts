@@ -12,6 +12,7 @@ import { fetchAgentState } from '@agents-haus/sdk';
 import { STRATEGY_LABELS, type Strategy } from '@agents-haus/common';
 import { getRpc, getSoulMint, getAgentStatePda, getExecutorAddress } from './env';
 import { startGateway } from './gateway';
+import { loadRuntimeSchedulerConfig, RuntimeScheduler } from './scheduler';
 
 const REQUIRED_ENV_VARS = [
   'SOLANA_RPC_URL',
@@ -76,20 +77,30 @@ async function main() {
     console.warn('Agent is paused. Waiting for activation...');
   }
 
+  const heartbeatStatus = {
+    enabled: alphaHausEnabled,
+    intervalSeconds: 60,
+    lastRunAt: null as string | null,
+    lastError: null as string | null,
+  };
+
   if (alphaHausEnabled) {
     // Heartbeat: check epoch state periodically for alpha.haus agents.
     const HEARTBEAT_INTERVAL_MS = 60_000;
 
     async function heartbeat() {
+      heartbeatStatus.lastRunAt = new Date().toISOString();
       try {
         const { checkEpochState } = await import(
           '../workspace/skills/alpha-haus/tools/check_epoch_state'
         );
         const state = await checkEpochState();
+        heartbeatStatus.lastError = null;
         console.log(
           `[heartbeat] epoch=${state.epoch} alpha=${state.agentIsAlpha} burner=${state.agentIsBurner} tipped=${state.agentHasTipped}`,
         );
       } catch (err) {
+        heartbeatStatus.lastError = err instanceof Error ? err.message : String(err);
         console.error('[heartbeat] error:', err);
       }
     }
@@ -98,11 +109,30 @@ async function main() {
     setInterval(heartbeat, HEARTBEAT_INTERVAL_MS);
     console.log(`Heartbeat running every ${HEARTBEAT_INTERVAL_MS / 1000}s`);
   } else {
+    heartbeatStatus.enabled = false;
     console.log('Heartbeat disabled (alpha-haus skill not enabled).');
   }
 
+  const scheduler = new RuntimeScheduler(
+    loadRuntimeSchedulerConfig(alphaHausEnabled),
+  );
+  scheduler.start();
+
+  const shutdown = (signal: string) => {
+    console.log(`[runtime] received ${signal}, shutting down`);
+    scheduler.stop();
+    process.exit(0);
+  };
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+
   // Start the chat gateway HTTP server
-  startGateway();
+  startGateway({
+    getRuntimeStatus: () => ({
+      heartbeat: heartbeatStatus,
+      scheduler: scheduler.getSnapshot(),
+    }),
+  });
 
   console.log('Agent runtime ready.');
 }

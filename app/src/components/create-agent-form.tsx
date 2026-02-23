@@ -23,6 +23,56 @@ const STEP_LABELS: Record<Step, string> = {
   identity: 'Identity + Strategy',
   mint: 'Mint',
 };
+const MAX_SOUL_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+const SUPPORTED_IMAGE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+]);
+const KNOWN_QUERY_SKILLS = new Set([
+  ...SOLANA_SKILL_PACKS.map((skill) => skill.id),
+  'alpha-haus',
+  'dca-planner',
+  'x-posting',
+  'grok-writer',
+]);
+
+async function fetchSharedExecutorAddress(): Promise<string> {
+  const response = await fetch('/api/runtime/executor', {
+    method: 'GET',
+    cache: 'no-store',
+  });
+  const payload = await response.json().catch(() => null);
+  const runtimeExecutor =
+    payload && typeof payload.runtimeExecutor === 'string'
+      ? payload.runtimeExecutor.trim()
+      : '';
+
+  if (!response.ok || !runtimeExecutor) {
+    throw new Error(payload?.error || 'Shared runtime executor is not configured');
+  }
+
+  return runtimeExecutor;
+}
+
+async function uploadSoulImage(file: File): Promise<string> {
+  const formData = new FormData();
+  formData.set('file', file);
+
+  const response = await fetch('/api/agent/image', {
+    method: 'POST',
+    body: formData,
+  });
+  const payload = await response.json().catch(() => null);
+  const imageUrl = payload && typeof payload.url === 'string' ? payload.url.trim() : '';
+
+  if (!response.ok || !imageUrl) {
+    throw new Error(payload?.error || 'Failed to upload Soul NFT image');
+  }
+
+  return imageUrl;
+}
 
 export function CreateAgentForm() {
   const router = useRouter();
@@ -39,8 +89,10 @@ export function CreateAgentForm() {
   const [extraSkills, setExtraSkills] = useState<string[]>([]);
   const [loadedSkillsFromQuery, setLoadedSkillsFromQuery] = useState(false);
   const [strategy, setStrategy] = useState<Strategy>(Strategy.AlphaHunter);
+  const [soulImageFile, setSoulImageFile] = useState<File | null>(null);
+  const [soulImagePreviewUrl, setSoulImagePreviewUrl] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitPhase, setSubmitPhase] = useState<'idle' | 'minting' | 'done'>('idle');
+  const [submitPhase, setSubmitPhase] = useState<'idle' | 'uploading' | 'minting' | 'deploying' | 'done'>('idle');
   const [error, setError] = useState<string | null>(null);
 
   const stepIndex = STEPS.indexOf(step);
@@ -78,12 +130,52 @@ export function CreateAgentForm() {
       .split(',')
       .map((skill) => skill.trim())
       .filter(Boolean)
-      .filter((skill) => skill.startsWith('sendaifun:'));
+      .filter((skill) => KNOWN_QUERY_SKILLS.has(skill));
     if (fromQuery.length > 0) {
       setExtraSkills(fromQuery);
     }
     setLoadedSkillsFromQuery(true);
   }, [loadedSkillsFromQuery, searchParams]);
+
+  useEffect(
+    () => () => {
+      if (soulImagePreviewUrl) {
+        URL.revokeObjectURL(soulImagePreviewUrl);
+      }
+    },
+    [soulImagePreviewUrl],
+  );
+
+  const handleSoulImageSelection = (file: File | null) => {
+    if (soulImagePreviewUrl) {
+      URL.revokeObjectURL(soulImagePreviewUrl);
+    }
+
+    if (!file) {
+      setSoulImageFile(null);
+      setSoulImagePreviewUrl(null);
+      setError(null);
+      return;
+    }
+
+    if (!SUPPORTED_IMAGE_MIME_TYPES.has(file.type)) {
+      setError('Soul NFT image must be PNG, JPG, GIF, or WebP');
+      setSoulImageFile(null);
+      setSoulImagePreviewUrl(null);
+      return;
+    }
+
+    if (file.size > MAX_SOUL_IMAGE_SIZE_BYTES) {
+      setError('Soul NFT image must be 5MB or smaller');
+      setSoulImageFile(null);
+      setSoulImagePreviewUrl(null);
+      return;
+    }
+
+    setError(null);
+    setSoulImageFile(file);
+    setSoulImagePreviewUrl(URL.createObjectURL(file));
+  };
 
   const handleNext = () => {
     if (step === 'identity' && !name.trim()) {
@@ -114,7 +206,7 @@ export function CreateAgentForm() {
     }
 
     setIsSubmitting(true);
-    setSubmitPhase('minting');
+    setSubmitPhase(soulImageFile ? 'uploading' : 'minting');
     setError(null);
 
     try {
@@ -122,11 +214,16 @@ export function CreateAgentForm() {
       const soulAssetKeypair = await generateKeyPair();
       const soulAssetAddress = await getAddressFromPublicKey(soulAssetKeypair.publicKey);
 
-      // 2. Generate executor keypair pubkey (can be replaced later from the agent page)
-      const executorKeypair = await generateKeyPair();
-      const executorAddress = await getAddressFromPublicKey(executorKeypair.publicKey);
+      // 2. Upload custom Soul image first so metadata points to a stable URL at mint time.
+      let uploadedImageUrl: string | null = null;
+      if (soulImageFile) {
+        uploadedImageUrl = await uploadSoulImage(soulImageFile);
+      }
 
-      // 3. Hash identity config for on-chain storage
+      // 3. Resolve shared runtime executor address (server-managed keypair)
+      const executorAddress = await fetchSharedExecutorAddress();
+
+      // 4. Hash identity config for on-chain storage
       const identityConfig = JSON.stringify({
         bio: bio.trim(),
         flavorId: selectedFlavor,
@@ -138,10 +235,17 @@ export function CreateAgentForm() {
         .map((b) => b.toString(16).padStart(2, '0'))
         .join('');
 
-      // 4. Build + send the on-chain create agent transaction
+      const metadataUri = new URL(`https://agents.haus/api/agent/${soulAssetAddress}`);
+      if (uploadedImageUrl) {
+        metadataUri.searchParams.set('image', uploadedImageUrl);
+      }
+
+      setSubmitPhase('minting');
+
+      // 5. Build + send the on-chain create agent transaction
       const ix = await createAgent({
         name: name.trim(),
-        uri: `https://agents.haus/api/agent/${soulAssetAddress}`,
+        uri: metadataUri.toString(),
         personalityHash,
         strategy,
         executorPubkey: executorAddress as string,
@@ -161,6 +265,37 @@ export function CreateAgentForm() {
         model: selectedProfile.defaultModel || null,
       };
       localStorage.setItem(`agent-deploy-preset:${soulAssetAddress}`, JSON.stringify(deployPreset));
+      localStorage.setItem(`agent-name:${soulAssetAddress}`, name.trim());
+      setSubmitPhase('deploying');
+
+      try {
+        const deployRes = await fetch(`/api/agent/${soulAssetAddress}/deploy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            force: true,
+            profileId: selectedFlavor,
+            skills: selectedSkills,
+            model: selectedProfile.defaultModel || null,
+          }),
+        });
+
+        if (deployRes.ok) {
+          const deployData = await deployRes.json().catch(() => null);
+          const deployState =
+            typeof deployData?.state === 'string'
+              ? deployData.state
+              : null;
+          if (deployState && deployState !== 'started' && deployState !== 'starting') {
+            await fetch(`/api/agent/${soulAssetAddress}/machine/start`, { method: 'POST' });
+          }
+        } else {
+          const deployErr = await deployRes.json().catch(() => null);
+          console.error('Runtime auto-deploy failed:', deployErr?.error || deployRes.statusText);
+        }
+      } catch (deployErr) {
+        console.error('Runtime auto-deploy request failed:', deployErr);
+      }
 
       const params = new URLSearchParams();
       params.set('profile', selectedFlavor);
@@ -232,6 +367,37 @@ export function CreateAgentForm() {
               className="w-full rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none resize-none transition-colors"
             />
             <p className="text-xs text-ink-muted mt-1.5">This becomes the agent&apos;s SOUL.md identity file.</p>
+          </div>
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="block text-sm font-medium text-ink">Soul NFT Image (optional)</label>
+              {soulImageFile && (
+                <button
+                  type="button"
+                  onClick={() => handleSoulImageSelection(null)}
+                  className="text-xs text-ink-muted underline-offset-2 hover:underline"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              onChange={(e) => handleSoulImageSelection(e.target.files?.[0] ?? null)}
+              className="w-full rounded-xl border border-border bg-surface-raised px-4 py-2.5 text-sm text-ink file:mr-3 file:rounded-full file:border-0 file:bg-ink file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-surface"
+            />
+            <p className="mt-1.5 text-xs text-ink-muted">
+              PNG, JPG, GIF, or WebP up to 5MB. Uploaded before mint and included in NFT metadata.
+            </p>
+            {soulImagePreviewUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={soulImagePreviewUrl}
+                alt="Soul NFT preview"
+                className="mt-3 h-40 w-40 rounded-xl border border-border-light object-cover"
+              />
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-ink mb-2">Alpha App Strategies</label>
@@ -378,9 +544,24 @@ export function CreateAgentForm() {
               ))}
             </div>
           </div>
+          <div className="space-y-2">
+            <div className="text-sm text-ink-muted">Soul NFT Image</div>
+            {soulImagePreviewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={soulImagePreviewUrl}
+                alt="Soul NFT preview"
+                className="h-40 w-40 rounded-xl border border-border-light object-cover"
+              />
+            ) : (
+              <div className="rounded-xl bg-surface px-4 py-3 text-sm text-ink-muted">
+                No custom image selected.
+              </div>
+            )}
+          </div>
           <div className="pt-4 border-t border-border-light text-xs text-ink-muted">
-            This mints your Soul NFT and creates agent state on-chain. Deploy settings for model and skills are prefilled on the
-            agent page.
+            This mints your Soul NFT, creates agent state on-chain, and then deploys and starts the runtime with your selected
+            profile and skills.
           </div>
         </div>
       )}
@@ -400,7 +581,13 @@ export function CreateAgentForm() {
             disabled={isSubmitting}
             className="rounded-full bg-brand-500 px-6 py-2 text-sm font-semibold text-white hover:bg-brand-600 transition-colors disabled:opacity-50"
           >
-            {submitPhase === 'minting' ? 'Minting on-chain...' : 'Mint Soul NFT'}
+            {submitPhase === 'uploading'
+              ? 'Uploading image...'
+              : submitPhase === 'minting'
+              ? 'Minting on-chain...'
+              : submitPhase === 'deploying'
+                ? 'Deploying runtime...'
+                : 'Mint Soul NFT'}
           </button>
         ) : (
           <button

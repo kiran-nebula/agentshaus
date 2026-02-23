@@ -12,18 +12,18 @@ pub const ALPHA_HAUS_PROGRAM_ID: Pubkey =
     pubkey!("A1PhATY12DpvpHGfGosxuruc7gqkcUUt9eFihb996rNn");
 
 // alpha.haus PDA seeds
-pub const EPOCH_STATUS_SEED: &[u8] = b"epoch_status";
+pub const EPOCH_STATUS_SEED: &[u8] = b"epoch_status_info";
 pub const ALPHA_SEED: &[u8] = b"alpha";
-pub const OTHER_ALPHAS_SEED: &[u8] = b"other_alphas";
+pub const OTHER_ALPHAS_SEED: &[u8] = b"other_alphas_info";
 pub const TOP_BURNER_SEED: &[u8] = b"top_burner";
-pub const OTHER_BURNERS_SEED: &[u8] = b"other_burners";
+pub const OTHER_BURNERS_SEED: &[u8] = b"other_burners_info";
 pub const WAS_ALPHA_TIPPER_SEED: &[u8] = b"was_alpha_tipper";
 pub const WAS_TOP_BURNER_SEED: &[u8] = b"was_top_burner";
 
 // alpha.haus instruction discriminators
-pub const ALPHA_TIP_DISCRIMINATOR: [u8; 8] = [22, 53, 104, 64, 248, 126, 123, 79];
-pub const ALPHA_BURN_DISCRIMINATOR: [u8; 8] = [241, 213, 177, 51, 194, 237, 61, 131];
-pub const ALPHA_CLAIM_DISCRIMINATOR: [u8; 8] = [4, 144, 132, 71, 116, 23, 151, 80];
+pub const ALPHA_TIP_DISCRIMINATOR: [u8; 8] = [77, 164, 35, 21, 36, 121, 213, 51];
+pub const ALPHA_BURN_DISCRIMINATOR: [u8; 8] = [76, 15, 51, 254, 229, 215, 121, 66];
+pub const ALPHA_CLAIM_DISCRIMINATOR: [u8; 8] = [62, 198, 214, 193, 213, 159, 108, 210];
 
 // alpha.haus epoch status discriminator
 pub const EPOCH_STATUS_DISCRIMINATOR: [u8; 8] = [53, 208, 49, 235, 139, 1, 230, 180];

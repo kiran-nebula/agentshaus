@@ -2,10 +2,8 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import type { Address } from '@solana/kit';
-import { getAddressFromPublicKey } from '@solana/kit';
 import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
-import { exportKeypairBytes } from '@/lib/export-keypair';
-import { getAgentWalletPda, fetchAgentWalletBalance } from '@agents-haus/sdk';
+import { getAgentWalletPda, fetchAgentWalletBalance, fetchCurrentSoulOwner } from '@agents-haus/sdk';
 import { useAgentState } from '@/hooks/use-agent-state';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
 import { useAgentTransactions } from '@/hooks/use-agent-transactions';
@@ -32,11 +30,37 @@ interface MachineInfo {
   state?: string;
   region?: string;
   name?: string;
+  runtimeExecutor?: string | null;
+  profileId?: string | null;
+  skills?: string[];
+  model?: string | null;
+  scheduler?: {
+    enabled?: boolean | null;
+    intervalMinutes?: number | null;
+    startupDelaySeconds?: number | null;
+    mode?: string | null;
+    autoReclaim?: boolean | null;
+  };
 }
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+}
+
+const CHAT_STORAGE_VERSION = 1;
+const MAX_PERSISTED_CHAT_MESSAGES = 120;
+
+function isPersistedMessage(value: unknown): value is Message {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    ('role' in value) &&
+    ('content' in value) &&
+    ((value as { role?: unknown }).role === 'user' ||
+      (value as { role?: unknown }).role === 'assistant') &&
+    typeof (value as { content?: unknown }).content === 'string'
+  );
 }
 
 interface DeployPreset {
@@ -258,6 +282,7 @@ function SettingsModal({
   soulMint,
   agentState,
   isOwner,
+  currentOwner,
   walletBalance,
   machineState,
   machineInfo,
@@ -269,6 +294,7 @@ function SettingsModal({
   soulMint: string;
   agentState: AgentState;
   isOwner: boolean;
+  currentOwner: string | null;
   walletBalance: bigint;
   machineState: string | null;
   machineInfo: MachineInfo | null;
@@ -356,6 +382,25 @@ function SettingsModal({
       onRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Transaction failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runtimeExecutor = machineInfo?.runtimeExecutor || null;
+  const chainExecutor = agentState.executor as string;
+  const executorMismatch = Boolean(
+    runtimeExecutor && chainExecutor && runtimeExecutor !== chainExecutor,
+  );
+
+  const handleDeployRuntime = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await onDeploy();
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Runtime deploy failed');
     } finally {
       setLoading(false);
     }
@@ -451,6 +496,9 @@ function SettingsModal({
                 <div className="rounded-xl border border-border-light p-4">
                   <div className="text-sm font-medium text-ink mb-1">Executor</div>
                   <div className="text-xs text-ink-muted font-mono mb-2">{truncateAddress(agentState.executor as string, 8)}</div>
+                  <div className="mb-2 text-[10px] text-ink-muted">
+                    Runtime signing key is managed in Runtime settings. If this value changes, redeploy runtime to sync keys.
+                  </div>
                   {isOwner && !showExecutorInput && (
                     <button onClick={() => setShowExecutorInput(true)} className="text-xs text-brand-500 hover:text-brand-700 font-medium transition-colors">Change executor</button>
                   )}
@@ -465,7 +513,7 @@ function SettingsModal({
 
                 {/* Owner info */}
                 <div className="text-[10px] text-ink-muted">
-                  Owner: <span className="font-mono">{truncateAddress(agentState.owner as string, 8)}</span>
+                  Owner: <span className="font-mono">{truncateAddress(currentOwner || (agentState.owner as string), 8)}</span>
                   {' · '}
                   Soul: <span className="font-mono">{truncateAddress(agentState.soulMint as string, 8)}</span>
                 </div>
@@ -481,7 +529,7 @@ function SettingsModal({
                     <>
                       <div className="text-xs text-ink-muted mb-3">Runtime not deployed yet.</div>
                       {isOwner && (
-                        <button onClick={onDeploy} disabled={loading} className="w-full rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50">
+                        <button onClick={handleDeployRuntime} disabled={loading} className="w-full rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50">
                           Deploy Runtime
                         </button>
                       )}
@@ -497,9 +545,31 @@ function SettingsModal({
                       <div className="space-y-2 text-xs">
                         <div className="flex justify-between"><span className="text-ink-muted">Region</span><span className="font-mono text-ink">{machineInfo.region || '—'}</span></div>
                         <div className="flex justify-between"><span className="text-ink-muted">Machine</span><span className="font-mono text-ink-muted">{machineInfo.machineId?.slice(0, 12) || '—'}</span></div>
+                        <div className="flex justify-between"><span className="text-ink-muted">Runtime executor</span><span className="font-mono text-ink">{runtimeExecutor ? truncateAddress(runtimeExecutor, 8) : '—'}</span></div>
+                        <div className="flex justify-between"><span className="text-ink-muted">On-chain executor</span><span className="font-mono text-ink">{truncateAddress(chainExecutor, 8)}</span></div>
+                        <div className="flex justify-between">
+                          <span className="text-ink-muted">Automation</span>
+                          <span className="font-mono text-ink">
+                            {machineInfo.scheduler?.enabled === true ? 'enabled' : machineInfo.scheduler?.enabled === false ? 'disabled' : '—'}
+                          </span>
+                        </div>
+                        {machineInfo.scheduler?.enabled === true && (
+                          <div className="flex justify-between">
+                            <span className="text-ink-muted">Interval</span>
+                            <span className="font-mono text-ink">
+                              {machineInfo.scheduler.intervalMinutes || 10}m ({machineInfo.scheduler.mode || 'alpha-maintenance'})
+                            </span>
+                          </div>
+                        )}
+                        {executorMismatch && (
+                          <div className="rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2 text-warning">
+                            Runtime executor differs from on-chain executor. Redeploy runtime to sync keys before funding.
+                          </div>
+                        )}
                       </div>
                       {isOwner && (
                         <div className="flex gap-2 pt-1">
+                          <button onClick={handleDeployRuntime} disabled={loading} className="flex-1 rounded-xl bg-brand-500 px-3 py-2 text-xs font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50">Redeploy</button>
                           {machineState === 'stopped' && (
                             <button onClick={() => onMachineAction('start')} disabled={loading} className="flex-1 rounded-xl bg-success/10 text-success px-3 py-2 text-xs font-medium hover:bg-success/15 transition-colors disabled:opacity-50">Start</button>
                           )}
@@ -640,6 +710,7 @@ export function AgentDetailClient({ soulMint }: Props) {
 
   const [walletBalance, setWalletBalance] = useState<bigint>(BigInt(0));
   const [agentWalletAddress, setAgentWalletAddress] = useState<string | null>(null);
+  const [currentSoulOwner, setCurrentSoulOwner] = useState<string | null>(null);
   const [machineInfo, setMachineInfo] = useState<MachineInfo | null>(null);
   const [machineState, setMachineState] = useState<string | null>(null);
 
@@ -666,6 +737,54 @@ export function AgentDetailClient({ soulMint }: Props) {
   const queryProfile = searchParams.get('profile');
   const querySkills = searchParams.get('skills');
   const queryModel = searchParams.get('model');
+  const chatStorageKey = `agent-chat:v${CHAT_STORAGE_VERSION}:${soulMint}`;
+  const [chatHydrated, setChatHydrated] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(chatStorageKey);
+      if (!raw) {
+        setChatHydrated(true);
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as {
+        messages?: unknown[];
+        selectedModel?: unknown;
+      };
+
+      if (Array.isArray(parsed.messages)) {
+        const persistedMessages = parsed.messages
+          .filter(isPersistedMessage)
+          .slice(-MAX_PERSISTED_CHAT_MESSAGES);
+        setMessages(persistedMessages);
+      }
+
+      if (typeof parsed.selectedModel === 'string' && parsed.selectedModel.trim()) {
+        setSelectedModel(parsed.selectedModel.trim());
+      }
+    } catch {
+      // Ignore malformed storage and continue with empty state.
+    } finally {
+      setChatHydrated(true);
+    }
+  }, [chatStorageKey]);
+
+  useEffect(() => {
+    if (!chatHydrated) return;
+    try {
+      localStorage.setItem(
+        chatStorageKey,
+        JSON.stringify({
+          messages: messages.slice(-MAX_PERSISTED_CHAT_MESSAGES),
+          selectedModel,
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+    } catch {
+      // Ignore storage quota/permission errors.
+    }
+  }, [chatHydrated, chatStorageKey, messages, selectedModel]);
 
   useEffect(() => {
     const parseSkills = (input: string | null): string[] =>
@@ -692,16 +811,32 @@ export function AgentDetailClient({ soulMint }: Props) {
     }
 
     const querySkillsList = parseSkills(querySkills);
+    const machineSkills = Array.isArray(machineInfo?.skills)
+      ? machineInfo.skills.filter((skill): skill is string => typeof skill === 'string')
+      : [];
+    const machineProfile =
+      typeof machineInfo?.profileId === 'string' && machineInfo.profileId.trim()
+        ? machineInfo.profileId.trim()
+        : null;
+    const machineModel =
+      typeof machineInfo?.model === 'string' && machineInfo.model.trim()
+        ? machineInfo.model.trim()
+        : null;
 
     const merged: DeployPreset = {
-      profileId: queryProfile || fromStorage?.profileId || 'alpha-hunter',
-      skills: querySkillsList.length > 0 ? querySkillsList : fromStorage?.skills || [],
-      model: queryModel || fromStorage?.model || null,
+      profileId: queryProfile || fromStorage?.profileId || machineProfile || 'alpha-hunter',
+      skills:
+        querySkillsList.length > 0
+          ? querySkillsList
+          : fromStorage?.skills?.length
+            ? fromStorage.skills
+            : machineSkills,
+      model: queryModel || fromStorage?.model || machineModel || null,
     };
 
     setDeployPreset(merged);
     localStorage.setItem(`agent-deploy-preset:${soulMint}`, JSON.stringify(merged));
-  }, [soulMint, queryModel, queryProfile, querySkills]);
+  }, [soulMint, queryModel, queryProfile, querySkills, machineInfo]);
 
   /* Data fetching */
   const fetchBalance = useCallback(async () => {
@@ -724,7 +859,17 @@ export function AgentDetailClient({ soulMint }: Props) {
     } catch { /* */ }
   }, [soulMint]);
 
+  const fetchSoulOwner = useCallback(async () => {
+    try {
+      const owner = await fetchCurrentSoulOwner(rpc, soulMint as Address);
+      setCurrentSoulOwner(owner ? (owner as string) : null);
+    } catch {
+      setCurrentSoulOwner(null);
+    }
+  }, [soulMint, rpc]);
+
   useEffect(() => { fetchBalance(); }, [fetchBalance]);
+  useEffect(() => { fetchSoulOwner(); }, [fetchSoulOwner]);
   useEffect(() => {
     fetchMachine();
     const iv = setInterval(fetchMachine, 15_000);
@@ -750,9 +895,22 @@ export function AgentDetailClient({ soulMint }: Props) {
     }
   }, [input]);
 
-  const handleRefresh = () => { refetch(); fetchBalance(); fetchMachine(); };
+  const handleRefresh = () => { refetch(); fetchBalance(); fetchMachine(); fetchSoulOwner(); };
 
-  const isOwner = agentState && wallets[0] && (agentState.owner as string) === wallets[0].address;
+  const clearConversation = useCallback(() => {
+    setMessages([]);
+    setChatError(null);
+    setChatLoading(false);
+    try {
+      localStorage.removeItem(chatStorageKey);
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [chatStorageKey]);
+
+  const connectedWallet = wallets[0]?.address;
+  const displayOwner = currentSoulOwner || (agentState ? (agentState.owner as string) : null);
+  const isOwner = Boolean(connectedWallet && displayOwner && displayOwner === connectedWallet);
   const isRunning = machineState === 'started';
 
   /* Chat */
@@ -782,14 +940,9 @@ export function AgentDetailClient({ soulMint }: Props) {
 
   /* Machine actions */
   const handleDeploy = async () => {
+    setChatError(null);
     try {
-      const executorKeypair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
-      const executorAddress = await getAddressFromPublicKey(executorKeypair.publicKey);
-      const fullKeypairBytes = await exportKeypairBytes(executorKeypair);
-      const executorSecretJson = JSON.stringify(Array.from(fullKeypairBytes));
-
       const deployPayload = {
-        executorKeypair: executorSecretJson,
         force: true,
         profileId: deployPreset.profileId,
         skills: deployPreset.skills,
@@ -801,17 +954,45 @@ export function AgentDetailClient({ soulMint }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(deployPayload),
       });
+
+      const deployData = await deployRes.json().catch(() => null);
       if (!deployRes.ok) {
-        const deployErr = await deployRes.json();
-        throw new Error(deployErr.error || 'Deploy failed');
+        throw new Error(deployData?.error || 'Deploy failed');
       }
 
-      const ix = await updateExecutor(soulMint, executorAddress as string);
-      await sendTransaction([ix]);
+      const runtimeExecutorAddress =
+        typeof deployData?.runtimeExecutor === 'string' && deployData.runtimeExecutor.trim()
+          ? deployData.runtimeExecutor.trim()
+          : null;
+      if (!runtimeExecutorAddress) {
+        throw new Error('Deploy succeeded but runtime executor address was missing');
+      }
+
+      try {
+        const ix = await updateExecutor(soulMint, runtimeExecutorAddress);
+        await sendTransaction([ix]);
+      } catch (updateErr) {
+        // Roll back the machine so we do not leave runtime and on-chain executor out of sync.
+        try {
+          await fetch(`/api/agent/${soulMint}/machine`, { method: 'DELETE' });
+        } catch {
+          // Best-effort rollback.
+        }
+        throw new Error(
+          `Runtime deployed with executor ${truncateAddress(
+            runtimeExecutorAddress,
+            8,
+          )}, but on-chain executor update failed. The runtime was destroyed to avoid key mismatch.`,
+        );
+      }
+
       await new Promise((r) => setTimeout(r, 2000));
       await fetchMachine();
     } catch (err) {
       console.error('Deploy error:', err);
+      const message = err instanceof Error ? err.message : 'Deploy failed';
+      setChatError(message);
+      throw new Error(message);
     }
   };
 
@@ -854,6 +1035,10 @@ export function AgentDetailClient({ soulMint }: Props) {
 
   /* ─── Chat-centric layout ─── */
   const hasMessages = messages.length > 0 || chatLoading;
+  const isBooting =
+    machineState === 'starting' ||
+    machineState === 'created' ||
+    machineState === 'restarting';
 
   return (
     <div className="flex h-[calc(100dvh-3.5rem)]">
@@ -870,6 +1055,14 @@ export function AgentDetailClient({ soulMint }: Props) {
             <span className="text-[11px] text-ink-muted font-mono truncate hidden sm:inline">{truncateAddress(soulMint, 4)}</span>
           </div>
           <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={clearConversation}
+              disabled={chatLoading || messages.length === 0}
+              className="rounded-lg p-1.5 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors disabled:opacity-30"
+              title="Clear conversation"
+            >
+              <IconX />
+            </button>
             <button
               onClick={() => setShowSettings(true)}
               className="rounded-lg p-1.5 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors"
@@ -889,20 +1082,70 @@ export function AgentDetailClient({ soulMint }: Props) {
 
         {/* Chat body */}
         {!isRunning && !hasMessages ? (
-          <div className="flex-1 flex flex-col items-center justify-center px-6">
-            <div className="text-center mb-6">
-              <h2 className="text-lg font-semibold text-ink mb-2">Agent is offline</h2>
-              <p className="text-sm text-ink-muted">Start the runtime to chat with your agent.</p>
+          isBooting ? (
+            <div className="flex-1 flex flex-col items-center justify-center px-6">
+              <div className="relative mb-6 h-28 w-28">
+                <div className="absolute inset-[14px] rounded-full border border-brand-500/30 animate-pulse" />
+                <div className="absolute inset-0 animate-[spin_7s_linear_infinite]">
+                  <span className="absolute left-1/2 top-0 h-3 w-3 -translate-x-1/2 rounded-full bg-brand-500 shadow-[0_0_16px_rgba(127,192,62,0.55)]" />
+                  <span className="absolute right-1.5 top-6 h-2.5 w-2.5 rounded-full bg-brand-500/70" />
+                  <span className="absolute right-2.5 bottom-6 h-2.5 w-2.5 rounded-full bg-brand-500/60" />
+                  <span className="absolute left-1/2 bottom-0 h-3 w-3 -translate-x-1/2 rounded-full bg-brand-500/65" />
+                  <span className="absolute bottom-6 left-2.5 h-2.5 w-2.5 rounded-full bg-brand-500/70" />
+                  <span className="absolute left-1.5 top-6 h-2.5 w-2.5 rounded-full bg-brand-500/60" />
+                </div>
+                <span className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-500 shadow-[0_0_22px_rgba(127,192,62,0.65)]" />
+              </div>
+              <h2 className="text-lg font-semibold text-ink mb-1">Booting agent runtime…</h2>
+              <p className="max-w-sm text-center text-sm text-ink-muted">
+                Your machine is starting on Fly. Chat will unlock automatically once it is online.
+              </p>
             </div>
-            {isOwner && (
-              <button
-                onClick={() => setShowSettings(true)}
-                className="rounded-xl bg-ink px-5 py-2.5 text-sm font-medium text-surface hover:bg-ink/90 transition-colors"
-              >
-                Open Settings
-              </button>
-            )}
-          </div>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center px-6">
+              <div className="w-full max-w-md rounded-2xl border border-border-light bg-surface-raised px-6 py-8 text-center">
+                <div className="mx-auto mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-surface">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-ink-muted">
+                    <rect x="2.5" y="2.5" width="19" height="19" rx="3" />
+                    <path d="M8 12h8" />
+                  </svg>
+                </div>
+                <h2 className="text-lg font-semibold text-ink mb-2">Agent is offline</h2>
+                <p className="text-sm text-ink-muted">
+                  Start the runtime to chat with your agent.
+                </p>
+                {isOwner && (
+                  <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+                    {machineInfo?.deployed ? (
+                      <button
+                        onClick={() => handleMachineAction('start')}
+                        className="rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-black hover:bg-brand-600 transition-colors"
+                      >
+                        Start Runtime
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          handleDeploy().catch(() => {
+                            // Error is surfaced via chatError state.
+                          });
+                        }}
+                        className="rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-black hover:bg-brand-600 transition-colors"
+                      >
+                        Deploy Runtime
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setShowSettings(true)}
+                      className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-ink-secondary hover:bg-surface-overlay transition-colors"
+                    >
+                      Open Settings
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )
         ) : !hasMessages ? (
           <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
             <h2 className="text-2xl font-semibold text-ink mb-10">What should your agent do?</h2>
@@ -1020,6 +1263,7 @@ export function AgentDetailClient({ soulMint }: Props) {
           soulMint={soulMint}
           agentState={agentState}
           isOwner={!!isOwner}
+          currentOwner={displayOwner}
           walletBalance={walletBalance}
           machineState={machineState}
           machineInfo={machineInfo}

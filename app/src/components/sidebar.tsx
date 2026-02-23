@@ -30,50 +30,9 @@ const MAIN_NAV_ITEMS: NavItem[] = [
       </svg>
     ),
   },
-  {
-    href: '/hosting',
-    label: 'Hosting',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 5.5h10v5H3z" />
-        <path d="M5 10.5v2M8 10.5v2M11 10.5v2" />
-      </svg>
-    ),
-  },
-  {
-    href: '/system',
-    label: 'System',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
-        <path d="M5.5 8h5" />
-        <path d="M8 5.5v5" />
-      </svg>
-    ),
-  },
 ];
 
 const FOOTER_NAV_ITEMS: NavItem[] = [
-  {
-    href: '/bookmarks',
-    label: 'Bookmarks',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M4 2.5h8v11l-4-2.5-4 2.5z" />
-      </svg>
-    ),
-  },
-  {
-    href: '/terminal',
-    label: 'Terminal',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
-        <path d="M5 6l2 2-2 2" />
-        <path d="M8.5 10h2.5" />
-      </svg>
-    ),
-  },
   {
     href: '/settings',
     label: 'Settings',

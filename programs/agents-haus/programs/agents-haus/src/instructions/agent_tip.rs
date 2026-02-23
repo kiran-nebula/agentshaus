@@ -46,11 +46,11 @@ pub struct AgentTip<'info> {
     #[account(mut)]
     pub alpha: UncheckedAccount<'info>,
 
-    /// CHECK: alpha.haus other_alphas PDA
+    /// CHECK: alpha.haus other_alphas_info PDA
     #[account(mut)]
     pub other_alphas: UncheckedAccount<'info>,
 
-    /// CHECK: alpha.haus was_alpha_tipper PDA for this agent's wallet
+    /// CHECK: alpha.haus was_alpha_tipper PDA for this agent's wallet (epoch, wallet seed order)
     #[account(mut)]
     pub was_alpha_tipper: UncheckedAccount<'info>,
 

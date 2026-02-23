@@ -131,7 +131,7 @@ export async function getAgentStatePda(
   });
 }
 
-/** Derive alpha.haus epoch_status PDA: seeds = ["epoch_status", epoch_le_bytes] */
+/** Derive alpha.haus epoch_status PDA: seeds = ["epoch_status_info", epoch_le_bytes] */
 export async function getEpochStatusPda(
   epoch: bigint,
 ): Promise<readonly [Address, number]> {
@@ -139,7 +139,7 @@ export async function getEpochStatusPda(
   new DataView(epochBytes.buffer).setBigUint64(0, epoch, true);
   return getProgramDerivedAddress({
     programAddress: ALPHA_HAUS_PROGRAM_ID,
-    seeds: [new TextEncoder().encode('epoch_status'), epochBytes],
+    seeds: [new TextEncoder().encode('epoch_status_info'), epochBytes],
   });
 }
 
@@ -155,7 +155,7 @@ export async function getAlphaPda(
   });
 }
 
-/** Derive alpha.haus other_alphas PDA: seeds = ["other_alphas", epoch_le_bytes] */
+/** Derive alpha.haus other_alphas PDA: seeds = ["other_alphas_info", epoch_le_bytes] */
 export async function getOtherAlphasPda(
   epoch: bigint,
 ): Promise<readonly [Address, number]> {
@@ -163,11 +163,11 @@ export async function getOtherAlphasPda(
   new DataView(epochBytes.buffer).setBigUint64(0, epoch, true);
   return getProgramDerivedAddress({
     programAddress: ALPHA_HAUS_PROGRAM_ID,
-    seeds: [new TextEncoder().encode('other_alphas'), epochBytes],
+    seeds: [new TextEncoder().encode('other_alphas_info'), epochBytes],
   });
 }
 
-/** Derive alpha.haus was_alpha_tipper PDA: seeds = ["was_alpha_tipper", wallet_pubkey, epoch_le_bytes] */
+/** Derive alpha.haus was_alpha_tipper PDA: seeds = ["was_alpha_tipper", epoch_le_bytes, wallet_pubkey] */
 export async function getWasAlphaTipperPda(
   wallet: Address,
   epoch: bigint,
@@ -176,7 +176,7 @@ export async function getWasAlphaTipperPda(
   new DataView(epochBytes.buffer).setBigUint64(0, epoch, true);
   return getProgramDerivedAddress({
     programAddress: ALPHA_HAUS_PROGRAM_ID,
-    seeds: [WAS_ALPHA_TIPPER_SEED, addressEncoder.encode(wallet), epochBytes],
+    seeds: [WAS_ALPHA_TIPPER_SEED, epochBytes, addressEncoder.encode(wallet)],
   });
 }
 
@@ -192,7 +192,7 @@ export async function getTopBurnerPda(
   });
 }
 
-/** Derive alpha.haus other_burners PDA: seeds = ["other_burners", epoch_le_bytes] */
+/** Derive alpha.haus other_burners PDA: seeds = ["other_burners_info", epoch_le_bytes] */
 export async function getOtherBurnersPda(
   epoch: bigint,
 ): Promise<readonly [Address, number]> {
@@ -200,11 +200,11 @@ export async function getOtherBurnersPda(
   new DataView(epochBytes.buffer).setBigUint64(0, epoch, true);
   return getProgramDerivedAddress({
     programAddress: ALPHA_HAUS_PROGRAM_ID,
-    seeds: [new TextEncoder().encode('other_burners'), epochBytes],
+    seeds: [new TextEncoder().encode('other_burners_info'), epochBytes],
   });
 }
 
-/** Derive alpha.haus was_top_burner PDA: seeds = ["was_top_burner", wallet_pubkey, epoch_le_bytes] */
+/** Derive alpha.haus was_top_burner PDA: seeds = ["was_top_burner", epoch_le_bytes, wallet_pubkey] */
 export async function getWasTopBurnerPda(
   wallet: Address,
   epoch: bigint,
@@ -213,6 +213,6 @@ export async function getWasTopBurnerPda(
   new DataView(epochBytes.buffer).setBigUint64(0, epoch, true);
   return getProgramDerivedAddress({
     programAddress: ALPHA_HAUS_PROGRAM_ID,
-    seeds: [WAS_TOP_BURNER_SEED, addressEncoder.encode(wallet), epochBytes],
+    seeds: [WAS_TOP_BURNER_SEED, epochBytes, addressEncoder.encode(wallet)],
   });
 }

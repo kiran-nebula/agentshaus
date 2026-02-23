@@ -10,7 +10,6 @@
 
 import { findCurrentEpochStatus } from '@agents-haus/sdk';
 import { lamportsToSol } from '@agents-haus/common';
-import { getAddressEncoder, getProgramDerivedAddress, type Address } from '@solana/kit';
 import {
   getRpc,
   getSoulMint,
@@ -18,20 +17,7 @@ import {
   getExecutorAddress,
   getWasAlphaTipperPda,
   getWasTopBurnerPda,
-  ALPHA_HAUS_PROGRAM_ID,
 } from '../../../../src/env';
-
-const addressEncoder = getAddressEncoder();
-const MAINNET_WAS_ALPHA_TIPPER_SEED = new TextEncoder().encode('was_alpha_tipper');
-
-async function getMainnetWasAlphaTipperPda(wallet: Address, epoch: bigint) {
-  const epochBytes = new Uint8Array(8);
-  new DataView(epochBytes.buffer).setBigUint64(0, epoch, true);
-  return getProgramDerivedAddress({
-    programAddress: ALPHA_HAUS_PROGRAM_ID,
-    seeds: [MAINNET_WAS_ALPHA_TIPPER_SEED, epochBytes, addressEncoder.encode(wallet)],
-  });
-}
 
 export async function checkEpochState() {
   try {
@@ -39,6 +25,7 @@ export async function checkEpochState() {
     const soulMint = getSoulMint();
     const executor = await getExecutorAddress();
     const [agentWallet] = await getAgentWalletPda(soulMint);
+    const alphaTipWallet = agentWallet;
 
     // Find current epoch
     const result = await findCurrentEpochStatus(rpc);
@@ -54,6 +41,10 @@ export async function checkEpochState() {
         agentHasBurned: false,
         agentIsAlpha: false,
         agentIsBurner: false,
+        postMode: 'cpi',
+        alphaTipWallet: alphaTipWallet as string,
+        burnWallet: agentWallet as string,
+        executorWallet: executor as string,
         error: 'No active epoch found',
       };
     }
@@ -63,8 +54,7 @@ export async function checkEpochState() {
 
     // Check if agent is current leader
     const agentIsAlpha =
-      status.topAlpha !== null &&
-      (status.topAlpha === agentWallet || status.topAlpha === executor);
+      status.topAlpha !== null && status.topAlpha === alphaTipWallet;
     const agentIsBurner =
       status.topBurner !== null && status.topBurner === agentWallet;
 
@@ -73,29 +63,13 @@ export async function checkEpochState() {
     let agentHasBurned = false;
 
     try {
-      const [wasAlphaTipper] = await getWasAlphaTipperPda(agentWallet, epoch);
+      const [wasAlphaTipper] = await getWasAlphaTipperPda(alphaTipWallet, epoch);
       const tipperAccount = await rpc
         .getAccountInfo(wasAlphaTipper, { encoding: 'base64' })
         .send();
       agentHasTipped = tipperAccount.value !== null;
     } catch {
       // PDA doesn't exist — agent hasn't tipped
-    }
-
-    // Mainnet alpha.haus tipper mark uses seed order: [was_alpha_tipper, epoch, wallet]
-    if (!agentHasTipped) {
-      try {
-        const [mainnetWasAlphaTipper] = await getMainnetWasAlphaTipperPda(
-          executor,
-          epoch,
-        );
-        const tipperAccount = await rpc
-          .getAccountInfo(mainnetWasAlphaTipper, { encoding: 'base64' })
-          .send();
-        agentHasTipped = tipperAccount.value !== null;
-      } catch {
-        // keep false
-      }
     }
 
     try {
@@ -119,6 +93,10 @@ export async function checkEpochState() {
       agentHasBurned,
       agentIsAlpha,
       agentIsBurner,
+      postMode: 'cpi',
+      alphaTipWallet: alphaTipWallet as string,
+      burnWallet: agentWallet as string,
+      executorWallet: executor as string,
     };
   } catch (err) {
     return {

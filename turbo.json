@@ -13,9 +13,11 @@
         "OPENROUTER_API_KEY",
         "X_BEARER_TOKEN",
         "X_API_BASE_URL",
+        "ALPHA_POST_MODE",
         "FLY_API_TOKEN",
         "FLY_APP_NAME",
-        "FLY_RUNTIME_IMAGE"
+        "FLY_RUNTIME_IMAGE",
+        "RUNTIME_EXECUTOR_KEYPAIR"
       ]
     },
     "dev": {

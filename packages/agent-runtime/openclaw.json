@@ -27,5 +27,12 @@
         }
       }
     }
+  },
+  "automation": {
+    "enabled": "${RUNTIME_SCHEDULER_ENABLED}",
+    "intervalMinutes": "${RUNTIME_SCHEDULER_INTERVAL_MINUTES}",
+    "startupDelaySeconds": "${RUNTIME_SCHEDULER_STARTUP_DELAY_SECONDS}",
+    "mode": "${RUNTIME_SCHEDULER_MODE}",
+    "autoReclaim": "${RUNTIME_AUTO_RECLAIM}"
   }
 }

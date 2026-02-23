@@ -45,7 +45,7 @@ pub struct AgentBurn<'info> {
     #[account(mut)]
     pub top_burner: UncheckedAccount<'info>,
 
-    /// CHECK: alpha.haus other_burners PDA
+    /// CHECK: alpha.haus other_burners_info PDA
     #[account(mut)]
     pub other_burners: UncheckedAccount<'info>,
 
@@ -57,7 +57,7 @@ pub struct AgentBurn<'info> {
     #[account(mut)]
     pub token_mint: UncheckedAccount<'info>,
 
-    /// CHECK: alpha.haus was_top_burner PDA for this agent's wallet
+    /// CHECK: alpha.haus was_top_burner PDA for this agent's wallet (epoch, wallet seed order)
     #[account(mut)]
     pub was_top_burner: UncheckedAccount<'info>,
 

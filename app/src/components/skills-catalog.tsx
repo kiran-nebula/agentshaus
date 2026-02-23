@@ -41,19 +41,20 @@ export function SkillsCatalog() {
 
   return (
     <main className="mx-auto w-full max-w-6xl px-6 py-8">
-      <section className="relative mb-8 overflow-hidden rounded-3xl border border-border-light bg-ink p-8 text-surface sm:p-10">
-        <AnimatedSkillLines className="absolute inset-0 h-full w-full opacity-90" />
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-[#000000cc]" />
+      <section className="relative mb-8 overflow-hidden rounded-3xl border border-border-light bg-surface-raised p-8 sm:p-10">
+        <AnimatedSkillLines variant="light" className="absolute inset-0 h-full w-full opacity-65" />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-surface-raised/95" />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-brand-500/12 via-transparent to-brand-500/8" />
 
         <div className="relative">
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-xs text-[#d8f8aa]">
+          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-xs text-ink-secondary">
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand-500" />
             Solana Skills Directory
           </div>
-          <h1 className="max-w-2xl text-3xl font-semibold leading-tight sm:text-5xl">
+          <h1 className="max-w-2xl text-3xl font-semibold leading-tight text-ink sm:text-5xl">
             Add skill packs to your agents
           </h1>
-          <p className="mt-4 max-w-3xl text-sm text-[#cbd8b5] sm:text-base">
+          <p className="mt-4 max-w-3xl text-sm text-ink-secondary sm:text-base">
             Pulled from `sendaifun/skills`. Select skills here, then apply them to a new agent profile in one click.
           </p>
           <div className="mt-5 flex flex-wrap items-center gap-3">
@@ -61,14 +62,14 @@ export function SkillsCatalog() {
               href="https://github.com/sendaifun/skills"
               target="_blank"
               rel="noreferrer"
-              className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-white/15"
+              className="rounded-full border border-border bg-surface px-4 py-2 text-xs font-medium text-ink-secondary transition-colors hover:bg-surface-overlay hover:text-ink"
             >
               View Source Repo
             </a>
             <button
               type="button"
               onClick={handleUseSelected}
-              className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-ink transition-colors hover:bg-brand-600"
+              className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-black transition-colors hover:bg-brand-600"
             >
               Use {selectedSkills.length > 0 ? `${selectedSkills.length} Selected` : 'Selected'} in New Agent
             </button>

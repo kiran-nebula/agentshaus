@@ -17,8 +17,24 @@ function getRpc(): Rpc<SolanaRpcApi> {
   return rpc;
 }
 
+function sanitizeMetadataImage(rawImage: string | null): string | null {
+  if (!rawImage) return null;
+  const candidate = rawImage.trim();
+  if (!candidate) return null;
+
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'ipfs:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -42,8 +58,27 @@ export async function GET(
     const strategyLabel =
       STRATEGY_LABELS[agentState.strategy as Strategy] ||
       `Unknown(${agentState.strategy})`;
+    const imageUrl = sanitizeMetadataImage(
+      new URL(request.url).searchParams.get('image'),
+    );
 
     return NextResponse.json({
+      name: `Agent ${id.slice(0, 8)}`,
+      symbol: 'SOUL',
+      description: 'Autonomous AI agent Soul NFT from agents.haus.',
+      image: imageUrl,
+      external_url: `https://agents.haus/agent/${id}`,
+      attributes: [
+        { trait_type: 'Soul Mint', value: id },
+        { trait_type: 'Strategy', value: strategyLabel },
+        { trait_type: 'Active', value: agentState.isActive ? 'true' : 'false' },
+      ],
+      properties: {
+        category: 'image',
+        files: imageUrl
+          ? [{ uri: imageUrl, type: 'image' }]
+          : [],
+      },
       soulMint: id,
       owner: agentState.owner,
       executor: agentState.executor,

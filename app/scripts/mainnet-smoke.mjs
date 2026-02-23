@@ -164,7 +164,7 @@ function createWithdrawFromAgentInstruction(accounts, amount) {
 
 function createClaimRewardsInstruction(accounts, epoch) {
   const data = new BorshWriter()
-    .bytes(new Uint8Array([4, 144, 132, 71, 116, 23, 151, 80]))
+    .bytes(new Uint8Array([62, 198, 214, 193, 213, 159, 108, 210]))
     .u64(epoch)
     .toBuffer();
 
@@ -527,17 +527,17 @@ async function deriveAlphaHausClaimPdas(agentWallet, epoch) {
 
   const [epochStatus] = await getProgramDerivedAddress({
     programAddress: ALPHA_HAUS_PROGRAM_ID,
-    seeds: [new TextEncoder().encode('epoch_status'), epochBytes],
+    seeds: [new TextEncoder().encode('epoch_status_info'), epochBytes],
   });
 
   const [wasAlphaTipper] = await getProgramDerivedAddress({
     programAddress: ALPHA_HAUS_PROGRAM_ID,
-    seeds: [WAS_ALPHA_TIPPER_SEED, encoder.encode(agentWallet), epochBytes],
+    seeds: [WAS_ALPHA_TIPPER_SEED, epochBytes, encoder.encode(agentWallet)],
   });
 
   const [wasTopBurner] = await getProgramDerivedAddress({
     programAddress: ALPHA_HAUS_PROGRAM_ID,
-    seeds: [WAS_TOP_BURNER_SEED, encoder.encode(agentWallet), epochBytes],
+    seeds: [WAS_TOP_BURNER_SEED, epochBytes, encoder.encode(agentWallet)],
   });
 
   return { epochStatus, wasAlphaTipper, wasTopBurner };
