@@ -29,6 +29,10 @@ interface AgentMachineState {
   state: string | null;
 }
 
+function defaultMachineState(): AgentMachineState {
+  return { deployed: false, state: null };
+}
+
 function parseAssetName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -53,21 +57,58 @@ export default function DashboardPage() {
   const [showActiveMachinesOnly, setShowActiveMachinesOnly] = useState(false);
   const walletAddress = wallets[0]?.address as Address | undefined;
 
-  const fetchAgentMachineState = useCallback(
-    async (soulMint: string): Promise<AgentMachineState> => {
+  const fetchMachineStatesBulk = useCallback(
+    async (soulMints: string[]): Promise<Record<string, AgentMachineState>> => {
+      const normalized = Array.from(
+        new Set(
+          soulMints
+            .map((mint) => mint.trim())
+            .filter(Boolean),
+        ),
+      ).slice(0, 200);
+      if (normalized.length === 0) return {};
+
       try {
-        const machineRes = await fetch(`/api/agent/${soulMint}/machine`, {
+        const response = await fetch('/api/agent/machines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ soulMints: normalized }),
           cache: 'no-store',
         });
+        if (!response.ok) {
+          return Object.fromEntries(
+            normalized.map((mint) => [mint, defaultMachineState()]),
+          );
+        }
 
-        if (!machineRes.ok) return { deployed: false, state: null };
-        const payload = await machineRes.json();
-        return {
-          deployed: Boolean(payload?.deployed),
-          state: typeof payload?.state === 'string' ? payload.state : null,
-        };
+        const payload = await response.json().catch(() => ({}));
+        const rawMachines =
+          payload &&
+          typeof payload === 'object' &&
+          payload.machines &&
+          typeof payload.machines === 'object'
+            ? (payload.machines as Record<string, unknown>)
+            : {};
+
+        const result: Record<string, AgentMachineState> = {};
+        for (const mint of normalized) {
+          const machine =
+            rawMachines[mint] && typeof rawMachines[mint] === 'object'
+              ? (rawMachines[mint] as {
+                  deployed?: unknown;
+                  state?: unknown;
+                })
+              : null;
+          result[mint] = {
+            deployed: Boolean(machine?.deployed),
+            state: typeof machine?.state === 'string' ? machine.state : null,
+          };
+        }
+        return result;
       } catch {
-        return { deployed: false, state: null };
+        return Object.fromEntries(
+          normalized.map((mint) => [mint, defaultMachineState()]),
+        );
       }
     },
     [],
@@ -101,24 +142,29 @@ export default function DashboardPage() {
         const results = await fetchAgentsByOwner(rpc, ownerAddress);
         if (cancelled) return;
 
-        // Fetch balances for each agent
-        const entries: AgentEntry[] = await Promise.all(
+        const soulMints = results.map(({ state }) => state.soulMint as string);
+        const machineStatesPromise = fetchMachineStatesBulk(soulMints);
+        const baseEntriesPromise = Promise.all(
           results.map(async ({ state }) => {
             const soulMint = state.soulMint as string;
             const [agentWallet] = await getAgentWalletPda(state.soulMint);
-            const [balance, machine] = await Promise.all([
-              fetchAgentWalletBalance(rpc, agentWallet),
-              fetchAgentMachineState(soulMint),
-            ]);
+            const balance = await fetchAgentWalletBalance(rpc, agentWallet);
             return {
               soulMint,
               state,
               balance,
               executor: state.executor as string,
-              machine,
             };
           }),
         );
+        const [machineStates, baseEntries] = await Promise.all([
+          machineStatesPromise,
+          baseEntriesPromise,
+        ]);
+        const entries: AgentEntry[] = baseEntries.map((entry) => ({
+          ...entry,
+          machine: machineStates[entry.soulMint] || defaultMachineState(),
+        }));
 
         if (!cancelled) {
           setAgents(entries);
@@ -135,7 +181,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [authenticated, walletAddress, rpc, hydrateCachedNames, fetchAgentMachineState]);
+  }, [authenticated, walletAddress, rpc, hydrateCachedNames, fetchMachineStatesBulk]);
 
   const handleSearch = useCallback(async () => {
     if (!searchMint.trim()) return;
@@ -145,12 +191,14 @@ export default function DashboardPage() {
       const [agentStateAddr] = await getAgentStatePda(mint);
       const state = await fetchAgentState(rpc, agentStateAddr);
       if (state) {
-        const [agentWallet] = await getAgentWalletPda(mint);
-        const [balance, machine] = await Promise.all([
-          fetchAgentWalletBalance(rpc, agentWallet),
-          fetchAgentMachineState(mint),
-        ]);
         const mintKey = searchMint.trim();
+        const machineStatesPromise = fetchMachineStatesBulk([mintKey]);
+        const [agentWallet] = await getAgentWalletPda(mint);
+        const [balance, machineStates] = await Promise.all([
+          fetchAgentWalletBalance(rpc, agentWallet),
+          machineStatesPromise,
+        ]);
+        const machine = machineStates[mintKey] || defaultMachineState();
         setAgents((prev) => {
           if (prev.some((a) => a.soulMint === mintKey)) return prev;
           return [
@@ -172,7 +220,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [searchMint, rpc, hydrateCachedNames, fetchAgentMachineState]);
+  }, [searchMint, rpc, hydrateCachedNames, fetchMachineStatesBulk]);
 
   useEffect(() => {
     if (agents.length === 0) return;
@@ -230,7 +278,7 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-[calc(100dvh-56px)]">
-      <section className="agents-dashboard-hero relative overflow-hidden border-b border-border-light px-10 py-8">
+      <section className="agents-dashboard-hero relative overflow-hidden border-b border-border-light px-4 py-6 sm:px-6 sm:py-8 lg:px-10">
         <AnimatedSkillLines variant="light" className="absolute inset-0 h-full w-full" />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-white/90" />
 
@@ -240,10 +288,10 @@ export default function DashboardPage() {
             Agents Workspace
           </div>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
-            <h1 className="max-w-2xl text-3xl font-semibold leading-tight text-ink sm:text-5xl">Manage your agents</h1>
+            <h1 className="max-w-2xl text-2xl font-semibold leading-tight text-ink sm:text-5xl">Manage your agents</h1>
             <Link
               href="/create"
-              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-black hover:bg-brand-600 transition-colors"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-brand-600 sm:w-auto"
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <path d="M7 2v10M2 7h10" />
@@ -255,7 +303,7 @@ export default function DashboardPage() {
             Search by Soul Mint, monitor balances, and jump directly into each agent for runtime and strategy controls.
           </p>
 
-          <div className="mt-6 flex max-w-3xl gap-2">
+          <div className="mt-6 flex max-w-3xl flex-col gap-2 sm:flex-row">
             <input
               value={searchMint}
               onChange={(e) => setSearchMint(e.target.value)}
@@ -265,7 +313,7 @@ export default function DashboardPage() {
             />
             <button
               onClick={handleSearch}
-              className="rounded-xl border border-black/10 bg-white/90 px-5 py-2.5 text-sm font-medium text-ink-secondary hover:bg-white transition-colors"
+              className="w-full rounded-xl border border-black/10 bg-white/90 px-5 py-2.5 text-sm font-medium text-ink-secondary transition-colors hover:bg-white sm:w-auto"
             >
               Load
             </button>
@@ -273,7 +321,7 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      <section className="agents-dashboard-content px-10 py-8">
+      <section className="agents-dashboard-content px-4 py-6 sm:px-6 sm:py-8 lg:px-10">
         {agents.length > 0 && (
           <div className="mb-5 flex flex-wrap items-center gap-2">
             <button
@@ -334,7 +382,7 @@ export default function DashboardPage() {
 
         {/* Empty state */}
         {agents.length === 0 && !loading && (
-          <div className="flex flex-col items-center justify-center rounded-2xl border border-border bg-surface-raised py-20 px-6">
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-border bg-surface-raised px-6 py-14 sm:py-20">
             {!authenticated ? (
               <>
                 <div className="mb-4 rounded-xl border border-border-light bg-surface p-3">

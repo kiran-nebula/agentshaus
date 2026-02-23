@@ -42,6 +42,10 @@ type AgentEntry = {
 
 const TREE_FETCH_TIMEOUT_MS = 12000;
 
+function defaultMachineState(): AgentMachineState {
+  return { deployed: false, state: null };
+}
+
 const DEFAULT_ROOTS: RootDescriptor[] = [
   { key: 'user', label: 'Custom Files', rootPath: 'workspace/user-files' },
   { key: 'workspace', label: 'Workspace', rootPath: 'workspace' },
@@ -175,6 +179,63 @@ export default function FilesPage() {
     [agents, selectedAgentMint],
   );
 
+  const fetchMachineStatesBulk = useCallback(
+    async (soulMints: string[]): Promise<Record<string, AgentMachineState>> => {
+      const normalized = Array.from(
+        new Set(
+          soulMints
+            .map((mint) => mint.trim())
+            .filter(Boolean),
+        ),
+      ).slice(0, 200);
+      if (normalized.length === 0) return {};
+
+      try {
+        const response = await fetch('/api/agent/machines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ soulMints: normalized }),
+          cache: 'no-store',
+        });
+        if (!response.ok) {
+          return Object.fromEntries(
+            normalized.map((mint) => [mint, defaultMachineState()]),
+          );
+        }
+
+        const payload = await response.json().catch(() => ({}));
+        const rawMachines =
+          payload &&
+          typeof payload === 'object' &&
+          payload.machines &&
+          typeof payload.machines === 'object'
+            ? (payload.machines as Record<string, unknown>)
+            : {};
+
+        const result: Record<string, AgentMachineState> = {};
+        for (const mint of normalized) {
+          const machine =
+            rawMachines[mint] && typeof rawMachines[mint] === 'object'
+              ? (rawMachines[mint] as {
+                  deployed?: unknown;
+                  state?: unknown;
+                })
+              : null;
+          result[mint] = {
+            deployed: Boolean(machine?.deployed),
+            state: typeof machine?.state === 'string' ? machine.state : null,
+          };
+        }
+        return result;
+      } catch {
+        return Object.fromEntries(
+          normalized.map((mint) => [mint, defaultMachineState()]),
+        );
+      }
+    },
+    [],
+  );
+
   const loadAgents = useCallback(async () => {
     if (!authenticated || !walletAddress) {
       setAgents([]);
@@ -187,43 +248,24 @@ export default function FilesPage() {
     try {
       const owner = walletAddress as Address;
       const results = await fetchAgentsByOwner(rpc, owner);
-      const entries = await Promise.all(
-        results.map(async ({ state }) => {
-          const soulMint = state.soulMint as string;
-          const cachedName = parseAssetName(
-            typeof window !== 'undefined'
-              ? localStorage.getItem(`agent-name:${soulMint}`)
-              : null,
-          );
+      const soulMints = results.map(({ state }) => state.soulMint as string);
+      const machineStates = await fetchMachineStatesBulk(soulMints);
+      const entries = results.map(({ state }) => {
+        const soulMint = state.soulMint as string;
+        const cachedName = parseAssetName(
+          typeof window !== 'undefined'
+            ? localStorage.getItem(`agent-name:${soulMint}`)
+            : null,
+        );
 
-          let machine: AgentMachineState = { deployed: false, state: null };
-          try {
-            const machineRes = await fetch(`/api/agent/${soulMint}/machine`, {
-              cache: 'no-store',
-            });
-            if (machineRes.ok) {
-              const machinePayload = await machineRes.json();
-              machine = {
-                deployed: Boolean(machinePayload?.deployed),
-                state:
-                  typeof machinePayload?.state === 'string'
-                    ? machinePayload.state
-                    : null,
-              };
-            }
-          } catch {
-            machine = { deployed: false, state: null };
-          }
-
-          return {
-            soulMint,
-            name: cachedName || `Agent ${soulMint.slice(0, 6)}`,
-            strategy: state.strategy,
-            isActive: state.isActive,
-            machine,
-          } satisfies AgentEntry;
-        }),
-      );
+        return {
+          soulMint,
+          name: cachedName || `Agent ${soulMint.slice(0, 6)}`,
+          strategy: state.strategy,
+          isActive: state.isActive,
+          machine: machineStates[soulMint] || defaultMachineState(),
+        } satisfies AgentEntry;
+      });
 
       setAgents(entries);
       setSelectedAgentMint((prev) => {
@@ -235,7 +277,7 @@ export default function FilesPage() {
     } finally {
       setLoadingAgents(false);
     }
-  }, [authenticated, walletAddress, rpc]);
+  }, [authenticated, walletAddress, rpc, fetchMachineStatesBulk]);
 
   const loadTree = useCallback(async () => {
     if (!selectedAgentMint) {
@@ -394,7 +436,7 @@ export default function FilesPage() {
       : normalizeRelativePath(pathInput).split('/').filter(Boolean);
 
   return (
-    <main className="min-h-[calc(100dvh-56px)] px-8 py-8">
+    <main className="min-h-[calc(100dvh-56px)] px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-ink">Files</h1>
         <p className="mt-1 text-sm text-ink-muted">
@@ -403,7 +445,7 @@ export default function FilesPage() {
       </div>
 
       {!authenticated ? (
-        <div className="max-w-3xl rounded-2xl border border-border bg-surface-raised p-6">
+        <div className="max-w-3xl rounded-2xl border border-border bg-surface-raised p-5 sm:p-6">
           <p className="text-sm text-ink-secondary">
             Connect your wallet to manage files across your agent machines.
           </p>
@@ -499,7 +541,7 @@ export default function FilesPage() {
               <p className="mb-3 text-xs text-ink-muted">
                 Files upload into <span className="font-mono">workspace/user-files</span> and are available to the runtime file tools.
               </p>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
                 <input
                   key={fileInputKey}
                   type="file"
@@ -519,7 +561,7 @@ export default function FilesPage() {
                   type="button"
                   onClick={handleUpload}
                   disabled={!selectedAgentMint || !uploadFile || uploading}
-                  className="rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50"
+                  className="w-full rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-brand-600 disabled:opacity-50 lg:w-auto"
                 >
                   {uploading ? 'Uploading...' : 'Upload'}
                 </button>
@@ -559,7 +601,7 @@ export default function FilesPage() {
                 </span>
               </div>
 
-              <div className="mb-3 flex flex-wrap items-center gap-2">
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                 <button
                   type="button"
                   onClick={() => {
@@ -568,7 +610,7 @@ export default function FilesPage() {
                     setPathInput(parent);
                   }}
                   disabled={normalizeRelativePath(activePath) === '.'}
-                  className="rounded-lg border border-border px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-overlay disabled:opacity-40"
+                  className="w-full rounded-lg border border-border px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-overlay disabled:opacity-40 sm:w-auto"
                 >
                   Up
                 </button>
@@ -577,12 +619,12 @@ export default function FilesPage() {
                   value={pathInput}
                   onChange={(e) => setPathInput(e.target.value)}
                   placeholder="."
-                  className="min-w-[260px] flex-1 rounded-lg border border-border bg-surface px-3 py-1.5 font-mono text-xs text-ink focus:border-ink focus:outline-none"
+                  className="w-full min-w-0 rounded-lg border border-border bg-surface px-3 py-1.5 font-mono text-xs text-ink focus:border-ink focus:outline-none sm:flex-1"
                 />
                 <select
                   value={String(depth)}
                   onChange={(e) => setDepth(Number.parseInt(e.target.value, 10))}
-                  className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-ink focus:border-ink focus:outline-none"
+                  className="w-full rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-ink focus:border-ink focus:outline-none sm:w-auto"
                 >
                   <option value="1">Depth 1</option>
                   <option value="2">Depth 2</option>
@@ -598,14 +640,14 @@ export default function FilesPage() {
                     setActivePath(normalized);
                     setPathInput(normalized);
                   }}
-                  className="rounded-lg border border-border px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-overlay"
+                  className="w-full rounded-lg border border-border px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-overlay sm:w-auto"
                 >
                   Go
                 </button>
                 <button
                   type="button"
                   onClick={loadTree}
-                  className="rounded-lg border border-border px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-overlay"
+                  className="w-full rounded-lg border border-border px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-overlay sm:w-auto"
                 >
                   Refresh
                 </button>
