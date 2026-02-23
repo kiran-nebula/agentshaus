@@ -22,6 +22,9 @@ import path from 'node:path';
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const OPENROUTER_ALLOW_FALLBACKS =
+  (process.env.OPENROUTER_ALLOW_FALLBACKS || 'false').trim().toLowerCase() ===
+  'true';
 const DEFAULT_MODEL = (process.env.AGENT_MODEL || 'moonshotai/kimi-k2.5').trim();
 const AGENT_PROFILE_ID = (process.env.AGENT_PROFILE_ID || 'alpha-hunter').trim();
 const RUNTIME_ROOT = process.cwd();
@@ -621,6 +624,10 @@ async function chatCompletion(messages: ChatMessage[], model: string): Promise<s
       messages: fullMessages,
       max_tokens: 4096,
       temperature: 0.7,
+      provider: {
+        // Keep requests pinned to the selected model unless explicitly overridden.
+        allow_fallbacks: OPENROUTER_ALLOW_FALLBACKS,
+      },
     };
     if (TOOL_DEFINITIONS.length > 0) {
       payload.tools = TOOL_DEFINITIONS;

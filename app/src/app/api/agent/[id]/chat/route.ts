@@ -411,6 +411,8 @@ export async function POST(
     const { id: soulMint } = await params;
     const body = await request.json();
     const { message, history, model } = body;
+    const requestedModel =
+      typeof model === 'string' && model.trim() ? model.trim() : 'default';
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json({ error: 'message is required' }, { status: 400 });
@@ -453,7 +455,7 @@ export async function POST(
       },
       body: JSON.stringify({
         messages,
-        model: model || 'default',
+        model: requestedModel,
         stream: false,
       }),
     });
@@ -470,8 +472,12 @@ export async function POST(
     const data = await chatResponse.json();
     const assistantMessage =
       data.choices?.[0]?.message?.content || data.response || 'No response';
+    const responseModel =
+      typeof data.model === 'string' && data.model.trim()
+        ? data.model.trim()
+        : requestedModel;
 
-    return NextResponse.json({ response: assistantMessage });
+    return NextResponse.json({ response: assistantMessage, model: responseModel });
   } catch (err) {
     console.error('Chat proxy error:', err);
     return NextResponse.json(

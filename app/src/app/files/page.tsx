@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import type { Address } from '@solana/kit';
 import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
@@ -92,13 +92,18 @@ function isRuntimeStarted(machine: AgentMachineState): boolean {
 function TreeNodeRows({
   node,
   level,
+  activePath,
   onOpenDirectory,
 }: {
   node: FileTreeNode;
   level: number;
+  activePath: string;
   onOpenDirectory: (path: string) => void;
 }) {
   const isDirectory = node.type === 'directory';
+  const normalizedNodePath = normalizeRelativePath(node.path);
+  const isActiveDirectory =
+    isDirectory && normalizedNodePath === normalizeRelativePath(activePath);
 
   return (
     <div>
@@ -108,13 +113,24 @@ function TreeNodeRows({
           if (isDirectory) onOpenDirectory(node.path);
         }}
         disabled={!isDirectory}
-        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors ${
+        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
           isDirectory
-            ? 'text-ink hover:bg-surface-overlay'
-            : 'text-ink-secondary'
+            ? isActiveDirectory
+              ? 'bg-surface-overlay text-ink'
+              : 'text-ink hover:bg-surface-overlay/70'
+            : 'text-ink-secondary hover:bg-surface-overlay/40'
         }`}
-        style={{ paddingLeft: `${8 + level * 16}px` }}
+        style={{ paddingLeft: `${10 + level * 18}px` }}
       >
+        <span className="text-ink-muted">
+          {isDirectory ? (
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 2.5L6.5 5L3 7.5" />
+            </svg>
+          ) : (
+            <span className="inline-block w-[10px]" />
+          )}
+        </span>
         <span className={isDirectory ? 'text-brand-500' : 'text-ink-muted'}>
           {isDirectory ? (
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -136,16 +152,42 @@ function TreeNodeRows({
       {isDirectory && node.children && node.children.length > 0 && (
         <div>
           {node.children.map((child) => (
-            <TreeNodeRows
-              key={`${child.path}:${child.name}:${child.type}`}
-              node={child}
-              level={level + 1}
-              onOpenDirectory={onOpenDirectory}
-            />
-          ))}
-        </div>
-      )}
-    </div>
+          <TreeNodeRows
+            key={`${child.path}:${child.name}:${child.type}`}
+            node={child}
+            level={level + 1}
+            activePath={activePath}
+            onOpenDirectory={onOpenDirectory}
+          />
+        ))}
+      </div>
+    )}
+  </div>
+  );
+}
+
+function ToolbarIconButton({
+  title,
+  onClick,
+  disabled,
+  children,
+}: {
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      disabled={disabled}
+      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border-light bg-surface text-ink-secondary transition-colors hover:bg-surface-overlay disabled:opacity-50"
+    >
+      {children}
+    </button>
   );
 }
 
@@ -443,18 +485,27 @@ export default function FilesPage() {
     }
   };
 
+  const normalizedActivePath = normalizeRelativePath(activePath);
   const pathSegments =
-    normalizeRelativePath(pathInput) === '.'
+    normalizedActivePath === '.'
       ? []
-      : normalizeRelativePath(pathInput).split('/').filter(Boolean);
+      : normalizedActivePath.split('/').filter(Boolean);
+  const selectedRootDescriptor = roots.find((root) => root.key === selectedRoot) || null;
+  const runtimeLabel = selectedAgent
+    ? selectedAgent.machine.deployed
+      ? selectedAgent.machine.state || 'deployed'
+      : 'not deployed'
+    : 'No runtime selected';
 
   return (
-    <main className="min-h-[calc(100dvh-56px)] px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-      <div className="mb-6">
-        <h1 className="text-xl font-semibold text-ink">Files</h1>
-        <p className="mt-1 text-sm text-ink-muted">
-          Upload custom files/images per agent and browse each machine&apos;s filesystem structure.
-        </p>
+    <main className="min-h-[calc(100dvh-56px)] px-2 py-3 sm:px-4 sm:py-4 lg:px-6">
+      <div className="mb-3 flex items-center justify-between gap-2 px-1">
+        <div>
+          <h1 className="text-lg font-semibold text-ink sm:text-xl">Files</h1>
+          <p className="text-xs text-ink-muted sm:text-sm">
+            Browse machine files and upload assets to agent workspaces.
+          </p>
+        </div>
       </div>
 
       {!authenticated ? (
@@ -464,157 +515,117 @@ export default function FilesPage() {
           </p>
           <button
             onClick={login}
-            className="mt-4 rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-black hover:bg-brand-600 transition-colors"
+            className="mt-4 rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-brand-600"
           >
             Connect Wallet
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
-          <aside className="rounded-2xl border border-border bg-surface-raised p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-ink">Your Agents</h2>
-              <button
-                type="button"
-                onClick={loadAgents}
-                className="text-xs text-ink-muted hover:text-ink transition-colors"
-              >
-                Refresh
-              </button>
-            </div>
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]">
+          <section className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-sm">
+            <div className="border-b border-border-light bg-surface/70 px-3 py-3 sm:px-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex items-center gap-2 rounded-lg border border-border-light bg-surface px-3 py-1.5 text-sm text-ink">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-ink-muted">
+                    <path d="M2.5 4.5a1 1 0 0 1 1-1h3l1 1H12.5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" />
+                  </svg>
+                  <span className="font-medium">Files</span>
+                  <span className="text-ink-muted">x</span>
+                </div>
 
-            {loadingAgents && (
-              <p className="text-xs text-ink-muted">Loading agents...</p>
-            )}
-            {agentError && (
-              <p className="text-xs text-danger">{agentError}</p>
-            )}
-            {!loadingAgents && agents.length === 0 && (
-              <div className="rounded-xl border border-border-light bg-surface px-3 py-4 text-xs text-ink-muted">
-                No agents found for this wallet.
-              </div>
-            )}
-
-            <div className="space-y-2">
-              {agents.map((agent) => {
-                const selected = selectedAgentMint === agent.soulMint;
-                return (
-                  <button
-                    key={agent.soulMint}
-                    type="button"
-                    onClick={() => setSelectedAgentMint(agent.soulMint)}
-                    className={`w-full rounded-xl border p-3 text-left transition-colors ${
-                      selected
-                        ? 'border-brand-500/40 bg-brand-500/5'
-                        : 'border-border-light bg-surface hover:border-border'
-                    }`}
+                <div className="flex items-center gap-1.5">
+                  <ToolbarIconButton
+                    title="Go up"
+                    disabled={normalizedActivePath === '.'}
+                    onClick={() => {
+                      const parent = getParentPath(activePath);
+                      setActivePath(parent);
+                      setPathInput(parent);
+                    }}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-sm font-medium text-ink">{agent.name}</span>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                          agent.isActive
-                            ? 'bg-success/10 text-success'
-                            : 'bg-surface-inset text-ink-muted'
-                        }`}
-                      >
-                        {agent.isActive ? 'Active' : 'Paused'}
-                      </span>
-                    </div>
-                    <div className="mt-1 font-mono text-[10px] text-ink-muted">
-                      {truncateAddress(agent.soulMint, 6)}
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-[11px]">
-                      <span className="text-ink-muted">
-                        {STRATEGY_LABELS[agent.strategy as Strategy]}
-                      </span>
-                      <span className="font-medium text-ink-secondary">
-                        {agent.machine.deployed ? agent.machine.state || 'deployed' : 'not deployed'}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </aside>
-
-          <section className="space-y-4">
-            <div className="rounded-2xl border border-border bg-surface-raised p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-ink">Upload to Selected Agent</h2>
-                {selectedAgent && (
-                  <Link
-                    href={`/agent/${selectedAgent.soulMint}`}
-                    className="text-xs text-brand-500 hover:text-brand-700 transition-colors"
-                  >
-                    Open Agent
-                  </Link>
-                )}
-              </div>
-              <p className="mb-3 text-xs text-ink-muted">
-                Files upload into <span className="font-mono">workspace/user-files</span> and are available to the runtime file tools.
-              </p>
-              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                <input
-                  key={fileInputKey}
-                  type="file"
-                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                  disabled={!selectedAgentMint || uploading}
-                  className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-ink file:mr-3 file:rounded-full file:border-0 file:bg-ink file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-surface disabled:opacity-60"
-                />
-                <input
-                  type="text"
-                  value={uploadPath}
-                  onChange={(e) => setUploadPath(e.target.value)}
-                  placeholder="Optional path e.g. research/market-notes.md"
-                  disabled={!selectedAgentMint || uploading}
-                  className="rounded-xl border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none disabled:opacity-60"
-                />
-                <button
-                  type="button"
-                  onClick={handleUpload}
-                  disabled={!selectedAgentMint || !uploadFile || uploading}
-                  className="w-full rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-brand-600 disabled:opacity-50 lg:w-auto"
-                >
-                  {uploading ? 'Uploading...' : 'Upload'}
-                </button>
-              </div>
-              {uploadStatus && (
-                <p className={`mt-2 text-xs ${uploadStatus.startsWith('Uploaded') ? 'text-success' : 'text-danger'}`}>
-                  {uploadStatus}
-                </p>
-              )}
-            </div>
-
-            <div className="rounded-2xl border border-border bg-surface-raised p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-sm font-semibold text-ink">Machine File Structure</h2>
-                <div className="flex flex-wrap items-center gap-2">
-                  {roots.map((root) => (
-                    <button
-                      key={root.key}
-                      type="button"
-                      onClick={() => setSelectedRoot(root.key)}
-                      className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                        selectedRoot === root.key
-                          ? 'bg-ink text-surface'
-                          : 'bg-surface-inset text-ink-secondary hover:bg-surface-overlay'
-                      }`}
-                    >
-                      {root.label}
-                    </button>
-                  ))}
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M8 12V4" />
+                      <path d="M4.5 7.5L8 4l3.5 3.5" />
+                    </svg>
+                  </ToolbarIconButton>
+                  <ToolbarIconButton title="Refresh files" onClick={loadTree}>
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M13 8a5 5 0 1 1-1.2-3.2" />
+                      <path d="M13 3v2.9h-2.9" />
+                    </svg>
+                  </ToolbarIconButton>
+                  <ToolbarIconButton title="Reload agents" onClick={loadAgents}>
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M8 3.5A2.5 2.5 0 1 0 8 8.5A2.5 2.5 0 1 0 8 3.5Z" />
+                      <path d="M3 13a5 5 0 0 1 10 0" />
+                    </svg>
+                  </ToolbarIconButton>
                 </div>
               </div>
 
-              <div className="mb-3 rounded-xl border border-border-light bg-surface px-3 py-2 text-[11px] text-ink-muted">
-                Root path:{' '}
-                <span className="font-mono">
-                  {roots.find((root) => root.key === selectedRoot)?.rootPath || '—'}
+              <div className="mt-2">
+                <span className="inline-flex rounded-md border border-border-light bg-surface px-2 py-1 text-xs text-ink-muted">
+                  Browse and manage your files.
                 </span>
               </div>
 
-              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+              <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                <label className="min-w-0 text-xs text-ink-muted">
+                  <span className="mb-1 block">Agent</span>
+                  <select
+                    value={selectedAgentMint ?? ''}
+                    onChange={(e) => setSelectedAgentMint(e.target.value || null)}
+                    className="w-full rounded-lg border border-border bg-surface px-2.5 py-2 text-sm text-ink focus:border-ink focus:outline-none disabled:opacity-60"
+                    disabled={loadingAgents || agents.length === 0}
+                  >
+                    <option value="">
+                      {loadingAgents
+                        ? 'Loading agents...'
+                        : agents.length === 0
+                          ? 'No agents found'
+                          : 'Select an agent'}
+                    </option>
+                    {agents.map((agent) => (
+                      <option key={agent.soulMint} value={agent.soulMint}>
+                        {agent.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="text-xs text-ink-muted">
+                  <span className="mb-1 block">Root</span>
+                  <select
+                    value={selectedRoot}
+                    onChange={(e) => setSelectedRoot(e.target.value as FileRootKey)}
+                    className="w-full rounded-lg border border-border bg-surface px-2.5 py-2 text-sm text-ink focus:border-ink focus:outline-none"
+                  >
+                    {roots.map((root) => (
+                      <option key={root.key} value={root.key}>
+                        {root.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="text-xs text-ink-muted">
+                  <span className="mb-1 block">Depth</span>
+                  <select
+                    value={String(depth)}
+                    onChange={(e) => setDepth(Number.parseInt(e.target.value, 10))}
+                    className="w-full rounded-lg border border-border bg-surface px-2.5 py-2 text-sm text-ink focus:border-ink focus:outline-none"
+                  >
+                    <option value="1">Depth 1</option>
+                    <option value="2">Depth 2</option>
+                    <option value="3">Depth 3</option>
+                    <option value="4">Depth 4</option>
+                    <option value="5">Depth 5</option>
+                    <option value="6">Depth 6</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
                 <button
                   type="button"
                   onClick={() => {
@@ -622,8 +633,8 @@ export default function FilesPage() {
                     setActivePath(parent);
                     setPathInput(parent);
                   }}
-                  disabled={normalizeRelativePath(activePath) === '.'}
-                  className="w-full rounded-lg border border-border px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-overlay disabled:opacity-40 sm:w-auto"
+                  disabled={normalizedActivePath === '.'}
+                  className="rounded-lg border border-border px-3 py-2 text-xs text-ink-secondary transition-colors hover:bg-surface-overlay disabled:opacity-50"
                 >
                   Up
                 </button>
@@ -632,20 +643,8 @@ export default function FilesPage() {
                   value={pathInput}
                   onChange={(e) => setPathInput(e.target.value)}
                   placeholder="."
-                  className="w-full min-w-0 rounded-lg border border-border bg-surface px-3 py-1.5 font-mono text-xs text-ink focus:border-ink focus:outline-none sm:flex-1"
+                  className="min-w-0 rounded-lg border border-border bg-surface px-3 py-2 font-mono text-xs text-ink focus:border-ink focus:outline-none"
                 />
-                <select
-                  value={String(depth)}
-                  onChange={(e) => setDepth(Number.parseInt(e.target.value, 10))}
-                  className="w-full rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs text-ink focus:border-ink focus:outline-none sm:w-auto"
-                >
-                  <option value="1">Depth 1</option>
-                  <option value="2">Depth 2</option>
-                  <option value="3">Depth 3</option>
-                  <option value="4">Depth 4</option>
-                  <option value="5">Depth 5</option>
-                  <option value="6">Depth 6</option>
-                </select>
                 <button
                   type="button"
                   onClick={() => {
@@ -653,27 +652,20 @@ export default function FilesPage() {
                     setActivePath(normalized);
                     setPathInput(normalized);
                   }}
-                  className="w-full rounded-lg border border-border px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-overlay sm:w-auto"
+                  className="rounded-lg border border-border px-3 py-2 text-xs text-ink-secondary transition-colors hover:bg-surface-overlay"
                 >
                   Go
                 </button>
-                <button
-                  type="button"
-                  onClick={loadTree}
-                  className="w-full rounded-lg border border-border px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-overlay sm:w-auto"
-                >
-                  Refresh
-                </button>
               </div>
 
-              <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-muted">
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-muted">
                 <button
                   type="button"
                   onClick={() => {
                     setActivePath('.');
                     setPathInput('.');
                   }}
-                  className="rounded px-1.5 py-0.5 hover:bg-surface-overlay"
+                  className="rounded border border-transparent px-1.5 py-0.5 hover:border-border-light hover:bg-surface-overlay"
                 >
                   root
                 </button>
@@ -687,7 +679,7 @@ export default function FilesPage() {
                         setActivePath(segmentPath);
                         setPathInput(segmentPath);
                       }}
-                      className="rounded px-1.5 py-0.5 hover:bg-surface-overlay"
+                      className="rounded border border-transparent px-1.5 py-0.5 hover:border-border-light hover:bg-surface-overlay"
                     >
                       / {segment}
                     </button>
@@ -695,14 +687,32 @@ export default function FilesPage() {
                 })}
               </div>
 
+              {(loadingAgents || agentError) && (
+                <div className="mt-2 text-xs">
+                  {loadingAgents && <p className="text-ink-muted">Refreshing agents...</p>}
+                  {agentError && <p className="text-danger">{agentError}</p>}
+                </div>
+              )}
+            </div>
+
+            <div className="border-b border-border-light bg-surface px-3 py-2 sm:px-4">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-ink">Name</span>
+                <span className="truncate font-mono text-[11px] text-ink-muted">
+                  {selectedRootDescriptor?.rootPath || '—'}
+                </span>
+              </div>
+            </div>
+
+            <div className="h-[58dvh] min-h-[340px] overflow-auto bg-surface px-2 py-2 sm:px-3">
               {!selectedAgentMint && (
-                <div className="rounded-xl border border-border-light bg-surface px-4 py-6 text-sm text-ink-muted">
+                <div className="rounded-xl border border-border-light bg-surface-raised px-4 py-6 text-sm text-ink-muted">
                   Select an agent to browse files.
                 </div>
               )}
 
               {selectedAgentMint && treeLoading && (
-                <div className="rounded-xl border border-border-light bg-surface px-4 py-6 text-sm text-ink-muted">
+                <div className="rounded-xl border border-border-light bg-surface-raised px-4 py-6 text-sm text-ink-muted">
                   Loading file tree...
                 </div>
               )}
@@ -714,10 +724,11 @@ export default function FilesPage() {
               )}
 
               {selectedAgentMint && tree && !treeLoading && (
-                <div className="max-h-[560px] overflow-auto rounded-xl border border-border-light bg-surface p-2">
+                <div className="rounded-xl border border-border-light bg-surface-raised p-2">
                   <TreeNodeRows
                     node={tree}
                     level={0}
+                    activePath={activePath}
                     onOpenDirectory={(nextPath) => {
                       const normalized = normalizeRelativePath(nextPath);
                       setActivePath(normalized);
@@ -733,6 +744,110 @@ export default function FilesPage() {
               )}
             </div>
           </section>
+
+          <aside className="overflow-hidden rounded-2xl border border-border bg-surface-raised shadow-sm">
+            <div className="border-b border-border-light px-4 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-ink">Workspace</h2>
+                {selectedAgent && (
+                  <Link
+                    href={`/agent/${selectedAgent.soulMint}`}
+                    className="text-xs text-brand-500 transition-colors hover:text-brand-700"
+                  >
+                    Open Agent
+                  </Link>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-4 p-4">
+              <section className="rounded-xl border border-border-light bg-surface p-3">
+                <div className="text-[11px] uppercase tracking-wide text-ink-muted">
+                  Selected Agent
+                </div>
+                {selectedAgent ? (
+                  <div className="mt-2 space-y-2">
+                    <div className="text-sm font-medium text-ink">{selectedAgent.name}</div>
+                    <div className="font-mono text-[11px] text-ink-muted">
+                      {truncateAddress(selectedAgent.soulMint, 8)}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                      <span className="rounded-full bg-surface-inset px-2 py-0.5 text-ink-secondary">
+                        {STRATEGY_LABELS[selectedAgent.strategy as Strategy]}
+                      </span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 font-medium ${
+                          selectedAgent.isActive
+                            ? 'bg-success/10 text-success'
+                            : 'bg-surface-inset text-ink-muted'
+                        }`}
+                      >
+                        {selectedAgent.isActive ? 'Active' : 'Paused'}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-xs text-ink-muted">
+                    Choose an agent to inspect files and upload assets.
+                  </p>
+                )}
+              </section>
+
+              <section className="rounded-xl border border-border-light bg-surface p-3">
+                <div className="text-[11px] uppercase tracking-wide text-ink-muted">Upload</div>
+                <p className="mt-1 text-xs text-ink-muted">
+                  Uploads land in <span className="font-mono">workspace/user-files</span>.
+                </p>
+                <div className="mt-3 space-y-2">
+                  <input
+                    key={fileInputKey}
+                    type="file"
+                    onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                    disabled={!selectedAgentMint || uploading}
+                    className="w-full rounded-lg border border-border bg-surface-raised px-2.5 py-2 text-xs text-ink file:mr-2 file:rounded-full file:border-0 file:bg-ink file:px-2.5 file:py-1 file:text-xs file:font-medium file:text-surface disabled:opacity-60"
+                  />
+                  <input
+                    type="text"
+                    value={uploadPath}
+                    onChange={(e) => setUploadPath(e.target.value)}
+                    placeholder="Optional path e.g. notes/today.md"
+                    disabled={!selectedAgentMint || uploading}
+                    className="w-full rounded-lg border border-border bg-surface-raised px-2.5 py-2 text-xs text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none disabled:opacity-60"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleUpload}
+                    disabled={!selectedAgentMint || !uploadFile || uploading}
+                    className="w-full rounded-lg bg-brand-500 px-3 py-2 text-xs font-medium text-black transition-colors hover:bg-brand-600 disabled:opacity-50"
+                  >
+                    {uploading ? 'Uploading...' : 'Upload file'}
+                  </button>
+                  {uploadStatus && (
+                    <p className={`text-xs ${uploadStatus.startsWith('Uploaded') ? 'text-success' : 'text-danger'}`}>
+                      {uploadStatus}
+                    </p>
+                  )}
+                </div>
+              </section>
+
+              <section
+                className="rounded-xl border border-border-light p-3"
+                style={{
+                  backgroundImage:
+                    'radial-gradient(circle at 1px 1px, var(--color-border-light) 1px, transparent 0)',
+                  backgroundSize: '14px 14px',
+                }}
+              >
+                <div className="text-sm text-ink-secondary">What can I do for you?</div>
+                <div className="mt-2 rounded-xl border border-border-light bg-surface/90 px-3 py-2 text-xs text-ink-muted">
+                  Runtime status: <span className="font-medium text-ink-secondary">{runtimeLabel}</span>
+                </div>
+                <p className="mt-2 text-xs text-ink-muted">
+                  Ask your selected agent to read, summarize, and transform files from its workspace.
+                </p>
+              </section>
+            </div>
+          </aside>
         </div>
       )}
     </main>

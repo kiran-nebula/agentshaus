@@ -47,6 +47,7 @@ interface MachineInfo {
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+  model?: string;
 }
 
 interface CronJobInfo {
@@ -76,6 +77,14 @@ function isPersistedMessage(value: unknown): value is Message {
       (value as { role?: unknown }).role === 'assistant') &&
     typeof (value as { content?: unknown }).content === 'string'
   );
+}
+
+function getModelName(modelId?: string): string | null {
+  if (!modelId) return null;
+  const normalized = modelId.trim();
+  if (!normalized) return null;
+  const found = DEFAULT_LLM_MODELS.find((entry) => entry.id === normalized);
+  return found ? found.name : normalized;
 }
 
 interface DeployPreset {
@@ -1044,6 +1053,7 @@ export function AgentDetailClient({ soulMint }: Props) {
   const sendMessage = async () => {
     if (!input.trim() || chatLoading) return;
     const userMessage = input.trim();
+    const modelForRequest = selectedModel;
     const history = clampChatMessages(messages);
     setInput('');
     setChatError(null);
@@ -1057,14 +1067,22 @@ export function AgentDetailClient({ soulMint }: Props) {
       const res = await fetch(`/api/agent/${soulMint}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage, history, model: selectedModel }),
+        body: JSON.stringify({
+          message: userMessage,
+          history,
+          model: modelForRequest,
+        }),
       });
       const data = await res.json();
       if (!res.ok) { setChatError(data.error || 'Failed to get response'); return; }
+      const responseModel =
+        typeof data.model === 'string' && data.model.trim()
+          ? data.model.trim()
+          : modelForRequest;
       setMessages(
         clampChatMessages([
           ...newMessages,
-          { role: 'assistant', content: data.response },
+          { role: 'assistant', content: data.response, model: responseModel },
         ]),
       );
     } catch (err) {
@@ -1327,6 +1345,11 @@ export function AgentDetailClient({ soulMint }: Props) {
                         : 'bg-surface-raised border border-border-light text-ink rounded-bl-md'
                     }`}>
                       <div className="whitespace-pre-wrap">{msg.content}</div>
+                      {msg.role === 'assistant' && msg.model && (
+                        <div className="mt-1 text-[10px] text-ink-muted/80">
+                          Model: {getModelName(msg.model)}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
