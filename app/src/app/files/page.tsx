@@ -150,7 +150,7 @@ function TreeNodeRows({
 }
 
 export default function FilesPage() {
-  const { authenticated, login, getAccessToken } = usePrivy();
+  const { authenticated, login, getAccessToken, user } = usePrivy();
   const { wallets } = useSolanaWallets();
   const { rpc } = useSolanaRpc();
 
@@ -174,7 +174,7 @@ export default function FilesPage() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
 
-  const walletAddress = getPreferredSolanaWallet(wallets)?.address as Address | undefined;
+  const walletAddress = getPreferredSolanaWallet(wallets, user)?.address as Address | undefined;
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.soulMint === selectedAgentMint) || null,
     [agents, selectedAgentMint],

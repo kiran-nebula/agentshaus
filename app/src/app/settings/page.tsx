@@ -67,7 +67,7 @@ export default function SettingsPage() {
   const [prefs, setPrefs] = useState<NotificationPrefs>(DEFAULT_NOTIFICATION_PREFS);
   const [copiedEmbeddedWallet, setCopiedEmbeddedWallet] = useState(false);
 
-  const walletAddress = getPreferredSolanaWallet(wallets)?.address || user?.wallet?.address || null;
+  const walletAddress = getPreferredSolanaWallet(wallets, user)?.address || user?.wallet?.address || null;
   const embeddedWalletAddress = getEmbeddedSolanaWallet(wallets)?.address || null;
 
   useEffect(() => {

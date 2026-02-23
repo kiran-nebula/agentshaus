@@ -1035,7 +1035,7 @@ export function AgentDetailClient({ soulMint }: Props) {
     }
   }, [chatStorageKey]);
 
-  const connectedWallet = getPreferredSolanaWallet(wallets)?.address;
+  const connectedWallet = getPreferredSolanaWallet(wallets, user)?.address;
   const displayOwner = currentSoulOwner || (agentState ? (agentState.owner as string) : null);
   const isOwner = Boolean(connectedWallet && displayOwner && displayOwner === connectedWallet);
   const isRunning = machineState === 'started';

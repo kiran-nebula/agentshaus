@@ -25,10 +25,10 @@ export function useAgentTransactions() {
   const { wallets } = useSolanaWallets();
 
   const getWalletAddress = useCallback((): Address => {
-    const solanaWallet = getPreferredSolanaWallet(wallets);
+    const solanaWallet = getPreferredSolanaWallet(wallets, user);
     if (!solanaWallet) throw new Error('No Solana wallet connected');
     return solanaWallet.address as Address;
-  }, [wallets]);
+  }, [wallets, user]);
 
   const createAgent = useCallback(
     async (args: {

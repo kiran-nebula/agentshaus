@@ -47,7 +47,7 @@ function isMachineActive(machine: AgentMachineState): boolean {
 }
 
 export default function DashboardPage() {
-  const { authenticated, login } = usePrivy();
+  const { authenticated, login, user } = usePrivy();
   const { wallets } = useSolanaWallets();
   const { rpc } = useSolanaRpc();
   const [agents, setAgents] = useState<AgentEntry[]>([]);
@@ -56,7 +56,7 @@ export default function DashboardPage() {
   const [searched, setSearched] = useState(false);
   const [searchMint, setSearchMint] = useState('');
   const [showActiveMachinesOnly, setShowActiveMachinesOnly] = useState(false);
-  const walletAddress = getPreferredSolanaWallet(wallets)?.address as Address | undefined;
+  const walletAddress = getPreferredSolanaWallet(wallets, user)?.address as Address | undefined;
 
   const fetchMachineStatesBulk = useCallback(
     async (soulMints: string[]): Promise<Record<string, AgentMachineState>> => {

@@ -25,7 +25,7 @@ function WalletButtonInner({ compactOnMobile = false }: WalletButtonProps) {
     );
   }
 
-  const preferredWallet = getPreferredSolanaWallet(wallets);
+  const preferredWallet = getPreferredSolanaWallet(wallets, user);
   const walletAddress = preferredWallet?.address || user?.wallet?.address;
 
   if (authenticated && user && walletAddress) {

@@ -17,6 +17,7 @@ import {
   useStandardSignAndSendTransaction,
   useStandardSignTransaction,
 } from '@privy-io/react-auth/solana';
+import { usePrivy } from '@privy-io/react-auth';
 import { useSolanaRpc } from './use-solana-rpc';
 import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
 
@@ -27,6 +28,7 @@ export interface KeypairSigner {
 }
 
 export function useSendTransaction() {
+  const { user } = usePrivy();
   const { wallets } = useConnectedStandardWallets();
   const { signAndSendTransaction } = useStandardSignAndSendTransaction();
   const { signTransaction } = useStandardSignTransaction();
@@ -72,7 +74,7 @@ export function useSendTransaction() {
       instructions: IInstruction[],
       additionalSigners?: KeypairSigner[],
     ): Promise<string> => {
-      const wallet = getPreferredSolanaWallet(wallets);
+      const wallet = getPreferredSolanaWallet(wallets, user);
       if (!wallet) throw new Error('No wallet connected');
 
       const feePayer = wallet.address as Address;
@@ -141,7 +143,7 @@ export function useSendTransaction() {
         return signature as string;
       }
     },
-    [wallets, signAndSendTransaction, signTransaction, rpc],
+    [wallets, user, signAndSendTransaction, signTransaction, rpc],
   );
 
   return { sendTransaction };
