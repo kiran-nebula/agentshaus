@@ -7,6 +7,7 @@ import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
 import { fetchAgentsByOwner } from '@agents-haus/sdk';
 import { STRATEGY_LABELS, truncateAddress, type Strategy } from '@agents-haus/common';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
+import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
 
 type FileRootKey = 'user' | 'workspace' | 'runtime' | 'tmp';
 
@@ -173,7 +174,7 @@ export default function FilesPage() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
 
-  const walletAddress = wallets[0]?.address as Address | undefined;
+  const walletAddress = getPreferredSolanaWallet(wallets)?.address as Address | undefined;
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.soulMint === selectedAgentMint) || null,
     [agents, selectedAgentMint],

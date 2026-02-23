@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
 import { truncateAddress } from '@agents-haus/common';
+import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
 
 interface WalletButtonProps {
   compactOnMobile?: boolean;
@@ -24,7 +25,8 @@ function WalletButtonInner({ compactOnMobile = false }: WalletButtonProps) {
     );
   }
 
-  const walletAddress = wallets[0]?.address || user?.wallet?.address;
+  const preferredWallet = getPreferredSolanaWallet(wallets);
+  const walletAddress = preferredWallet?.address || user?.wallet?.address;
 
   if (authenticated && user && walletAddress) {
     return (

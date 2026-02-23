@@ -18,6 +18,7 @@ import {
   useStandardSignTransaction,
 } from '@privy-io/react-auth/solana';
 import { useSolanaRpc } from './use-solana-rpc';
+import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
 
 /** A keypair signer for additional signers (e.g. soul asset mint) */
 export interface KeypairSigner {
@@ -71,7 +72,7 @@ export function useSendTransaction() {
       instructions: IInstruction[],
       additionalSigners?: KeypairSigner[],
     ): Promise<string> => {
-      const wallet = wallets[0];
+      const wallet = getPreferredSolanaWallet(wallets);
       if (!wallet) throw new Error('No wallet connected');
 
       const feePayer = wallet.address as Address;

@@ -16,6 +16,7 @@ import {
   PROGRAM_ID,
   MPL_CORE_PROGRAM_ID,
 } from '@agents-haus/common';
+import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
 
 const SYSTEM_PROGRAM = '11111111111111111111111111111111' as Address;
 
@@ -24,7 +25,7 @@ export function useAgentTransactions() {
   const { wallets } = useSolanaWallets();
 
   const getWalletAddress = useCallback((): Address => {
-    const solanaWallet = wallets[0];
+    const solanaWallet = getPreferredSolanaWallet(wallets);
     if (!solanaWallet) throw new Error('No Solana wallet connected');
     return solanaWallet.address as Address;
   }, [wallets]);

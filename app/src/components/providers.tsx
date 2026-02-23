@@ -38,7 +38,9 @@ export function Providers({ children }: { children: ReactNode }) {
           },
         },
         embeddedWallets: {
-          createOnLogin: 'all-users',
+          solana: {
+            createOnLogin: 'all-users',
+          },
         },
       }}
     >

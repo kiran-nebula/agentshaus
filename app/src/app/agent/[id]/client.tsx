@@ -8,6 +8,7 @@ import { useAgentState } from '@/hooks/use-agent-state';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
 import { useAgentTransactions } from '@/hooks/use-agent-transactions';
 import { useSendTransaction } from '@/hooks/use-send-transaction';
+import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
 import { DEFAULT_LLM_MODELS } from '@agents-haus/common';
 import {
   Strategy,
@@ -1034,7 +1035,7 @@ export function AgentDetailClient({ soulMint }: Props) {
     }
   }, [chatStorageKey]);
 
-  const connectedWallet = wallets[0]?.address;
+  const connectedWallet = getPreferredSolanaWallet(wallets)?.address;
   const displayOwner = currentSoulOwner || (agentState ? (agentState.owner as string) : null);
   const isOwner = Boolean(connectedWallet && displayOwner && displayOwner === connectedWallet);
   const isRunning = machineState === 'started';

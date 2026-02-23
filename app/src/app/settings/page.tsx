@@ -5,6 +5,7 @@ import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
 import { truncateAddress } from '@agents-haus/common';
 import { useTheme } from '@/components/theme-provider';
 import { DEFAULT_THEME } from '@/lib/themes';
+import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
 
 const NOTIFICATION_PREFS_KEY = 'agentshaus:notification-prefs';
 
@@ -62,7 +63,7 @@ export default function SettingsPage() {
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [prefs, setPrefs] = useState<NotificationPrefs>(DEFAULT_NOTIFICATION_PREFS);
 
-  const walletAddress = wallets[0]?.address || user?.wallet?.address || null;
+  const walletAddress = getPreferredSolanaWallet(wallets)?.address || user?.wallet?.address || null;
 
   useEffect(() => {
     try {

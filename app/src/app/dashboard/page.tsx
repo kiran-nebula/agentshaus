@@ -15,6 +15,7 @@ import type { AgentState } from '@agents-haus/sdk';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
 import { AgentCard } from '@/components/agent-card';
 import { AnimatedSkillLines } from '@/components/animated-skill-lines';
+import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
 
 interface AgentEntry {
   soulMint: string;
@@ -55,7 +56,7 @@ export default function DashboardPage() {
   const [searched, setSearched] = useState(false);
   const [searchMint, setSearchMint] = useState('');
   const [showActiveMachinesOnly, setShowActiveMachinesOnly] = useState(false);
-  const walletAddress = wallets[0]?.address as Address | undefined;
+  const walletAddress = getPreferredSolanaWallet(wallets)?.address as Address | undefined;
 
   const fetchMachineStatesBulk = useCallback(
     async (soulMints: string[]): Promise<Record<string, AgentMachineState>> => {
