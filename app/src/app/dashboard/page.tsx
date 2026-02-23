@@ -143,33 +143,41 @@ export default function DashboardPage() {
         if (cancelled) return;
 
         const soulMints = results.map(({ state }) => state.soulMint as string);
+        const initialEntries: AgentEntry[] = results.map(({ state }) => ({
+          soulMint: state.soulMint as string,
+          state,
+          balance: BigInt(0),
+          executor: state.executor as string,
+          machine: defaultMachineState(),
+        }));
+
+        setAgents(initialEntries);
+        hydrateCachedNames(soulMints);
+        setLoading(false);
+
         const machineStatesPromise = fetchMachineStatesBulk(soulMints);
-        const baseEntriesPromise = Promise.all(
+        const balancePairsPromise = Promise.all(
           results.map(async ({ state }) => {
             const soulMint = state.soulMint as string;
             const [agentWallet] = await getAgentWalletPda(state.soulMint);
             const balance = await fetchAgentWalletBalance(rpc, agentWallet);
-            return {
-              soulMint,
-              state,
-              balance,
-              executor: state.executor as string,
-            };
+            return [soulMint, balance] as const;
           }),
         );
-        const [machineStates, baseEntries] = await Promise.all([
+        const [machineStates, balancePairs] = await Promise.all([
           machineStatesPromise,
-          baseEntriesPromise,
+          balancePairsPromise,
         ]);
-        const entries: AgentEntry[] = baseEntries.map((entry) => ({
-          ...entry,
-          machine: machineStates[entry.soulMint] || defaultMachineState(),
-        }));
+        if (cancelled) return;
 
-        if (!cancelled) {
-          setAgents(entries);
-          hydrateCachedNames(entries.map((entry) => entry.soulMint));
-        }
+        const balanceMap = new Map(balancePairs);
+        setAgents((prev) =>
+          prev.map((entry) => ({
+            ...entry,
+            balance: balanceMap.get(entry.soulMint) ?? entry.balance,
+            machine: machineStates[entry.soulMint] || entry.machine,
+          })),
+        );
       } catch (err) {
         console.error('Failed to load wallet agents:', err);
       } finally {
