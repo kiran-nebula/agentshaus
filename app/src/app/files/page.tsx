@@ -149,7 +149,7 @@ function TreeNodeRows({
 }
 
 export default function FilesPage() {
-  const { authenticated, login } = usePrivy();
+  const { authenticated, login, getAccessToken } = usePrivy();
   const { wallets } = useSolanaWallets();
   const { rpc } = useSolanaRpc();
 
@@ -178,6 +178,16 @@ export default function FilesPage() {
     () => agents.find((agent) => agent.soulMint === selectedAgentMint) || null,
     [agents, selectedAgentMint],
   );
+
+  const getAuthHeaders = useCallback(async (): Promise<HeadersInit> => {
+    const accessToken = await getAccessToken();
+    if (!accessToken) {
+      throw new Error('Wallet session expired. Reconnect and try again.');
+    }
+    return {
+      Authorization: `Bearer ${accessToken}`,
+    };
+  }, [getAccessToken]);
 
   const fetchMachineStatesBulk = useCallback(
     async (soulMints: string[]): Promise<Record<string, AgentMachineState>> => {
@@ -312,6 +322,7 @@ export default function FilesPage() {
       const res = await fetch(`/api/agent/${selectedAgentMint}/files?${query.toString()}`, {
         cache: 'no-store',
         signal: controller.signal,
+        headers: await getAuthHeaders(),
       }).finally(() => window.clearTimeout(timeout));
       const payload = await res.json().catch(() => null);
       if (!res.ok) {
@@ -354,7 +365,7 @@ export default function FilesPage() {
     } finally {
       setTreeLoading(false);
     }
-  }, [activePath, depth, selectedAgentMint, selectedRoot, selectedAgent]);
+  }, [activePath, depth, getAuthHeaders, selectedAgentMint, selectedRoot, selectedAgent]);
 
   useEffect(() => {
     loadAgents();
@@ -399,6 +410,7 @@ export default function FilesPage() {
         method: 'POST',
         body: formData,
         signal: controller.signal,
+        headers: await getAuthHeaders(),
       }).finally(() => window.clearTimeout(timeout));
       const payload = await res.json().catch(() => null);
       if (!res.ok) {
