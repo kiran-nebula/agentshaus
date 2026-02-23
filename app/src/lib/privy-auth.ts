@@ -26,6 +26,12 @@ type UserWalletCacheEntry = {
 };
 const userWalletCache = new Map<string, UserWalletCacheEntry>();
 
+type WalletOwnerCacheEntry = {
+  expiresAt: number;
+  userId: string | null;
+};
+const walletOwnerCache = new Map<string, WalletOwnerCacheEntry>();
+
 function getPrivyClient(): PrivyClient {
   if (privyClient) return privyClient;
 
@@ -101,6 +107,26 @@ function setCachedUserWallets(userId: string, addresses: Set<string>): void {
   });
 }
 
+function getCachedWalletOwner(walletAddress: string): string | null | undefined {
+  const cached = walletOwnerCache.get(walletAddress);
+  if (!cached) return undefined;
+  if (cached.expiresAt <= Date.now()) {
+    walletOwnerCache.delete(walletAddress);
+    return undefined;
+  }
+  return cached.userId;
+}
+
+function setCachedWalletOwner(walletAddress: string, userId: string | null): void {
+  if (walletOwnerCache.size >= OWNERSHIP_CACHE_MAX_ENTRIES) {
+    walletOwnerCache.clear();
+  }
+  walletOwnerCache.set(walletAddress, {
+    expiresAt: Date.now() + OWNERSHIP_CACHE_TTL_MS,
+    userId,
+  });
+}
+
 function getErrorStatus(err: unknown): number | null {
   if (
     err &&
@@ -142,19 +168,54 @@ function extractWalletAddresses(user: unknown): Set<string> {
   return addresses;
 }
 
+function extractUserId(user: unknown): string | null {
+  if (!user || typeof user !== 'object') return null;
+  const candidate = user as { id?: unknown };
+  if (typeof candidate.id !== 'string') return null;
+  const trimmed = candidate.id.trim();
+  return trimmed || null;
+}
+
 export async function isWalletLinkedToPrivyUser(
   userId: string,
   walletAddress: string,
 ): Promise<boolean> {
-  const cacheKey = getOwnershipCacheKey(userId, walletAddress);
-  if (isOwnershipCacheHit(cacheKey)) return true;
   const requestedWallet = walletAddress.trim();
   if (!requestedWallet) return false;
+
+  const cacheKey = getOwnershipCacheKey(userId, requestedWallet);
+  if (isOwnershipCacheHit(cacheKey)) return true;
+
+  const cachedWalletOwner = getCachedWalletOwner(requestedWallet);
+  if (cachedWalletOwner !== undefined) {
+    const matches = cachedWalletOwner === userId;
+    if (matches) setOwnershipCache(cacheKey);
+    return matches;
+  }
+
+  try {
+    const userByWallet = await getPrivyClient().getUserByWalletAddress(requestedWallet);
+    const ownerId = extractUserId(userByWallet);
+    if (ownerId) {
+      setCachedWalletOwner(requestedWallet, ownerId);
+      const matches = ownerId === userId;
+      if (matches) setOwnershipCache(cacheKey);
+      return matches;
+    }
+  } catch (err) {
+    const status = getErrorStatus(err);
+    if (status !== 404) {
+      // Fallback below for transient lookup failures.
+    }
+  }
 
   const cachedWallets = getCachedUserWallets(userId);
   if (cachedWallets) {
     const matches = cachedWallets.has(requestedWallet);
-    if (matches) setOwnershipCache(cacheKey);
+    if (matches) {
+      setOwnershipCache(cacheKey);
+      setCachedWalletOwner(requestedWallet, userId);
+    }
     return matches;
   }
 
@@ -170,6 +231,11 @@ export async function isWalletLinkedToPrivyUser(
   const linkedWallets = extractWalletAddresses(user);
   setCachedUserWallets(userId, linkedWallets);
   const matches = linkedWallets.has(requestedWallet);
-  if (matches) setOwnershipCache(cacheKey);
+  if (matches) {
+    setOwnershipCache(cacheKey);
+    setCachedWalletOwner(requestedWallet, userId);
+  } else {
+    setCachedWalletOwner(requestedWallet, null);
+  }
   return matches;
 }
