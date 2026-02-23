@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
 import { truncateAddress } from '@agents-haus/common';
 import { useTheme } from '@/components/theme-provider';
@@ -61,13 +61,8 @@ export default function SettingsPage() {
 
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [prefs, setPrefs] = useState<NotificationPrefs>(DEFAULT_NOTIFICATION_PREFS);
-  const [copiedRpc, setCopiedRpc] = useState(false);
 
   const walletAddress = wallets[0]?.address || user?.wallet?.address || null;
-  const rpcEndpoint = useMemo(
-    () => (process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com').trim(),
-    [],
-  );
 
   useEffect(() => {
     try {
@@ -100,16 +95,6 @@ export default function SettingsPage() {
     if (!prefsLoaded) return;
     localStorage.setItem(NOTIFICATION_PREFS_KEY, JSON.stringify(prefs));
   }, [prefs, prefsLoaded]);
-
-  const handleCopyRpc = async () => {
-    try {
-      await navigator.clipboard.writeText(rpcEndpoint);
-      setCopiedRpc(true);
-      setTimeout(() => setCopiedRpc(false), 1200);
-    } catch {
-      setCopiedRpc(false);
-    }
-  };
 
   return (
     <main className="px-4 py-6 sm:px-6 sm:py-8 lg:px-10">
@@ -206,21 +191,6 @@ export default function SettingsPage() {
               }`}
             >
               {authenticated ? 'Disconnect Wallet' : 'Connect Wallet'}
-            </button>
-          </section>
-
-          <section className="rounded-2xl border border-border bg-surface-raised p-5">
-            <h3 className="text-sm font-semibold text-ink">Network</h3>
-            <p className="mt-1 text-xs text-ink-muted">RPC endpoint used by dashboard and runtime management APIs.</p>
-            <div className="mt-4 rounded-xl border border-border-light bg-surface px-4 py-3">
-              <div className="font-mono text-xs text-ink break-all">{rpcEndpoint}</div>
-            </div>
-            <button
-              type="button"
-              onClick={handleCopyRpc}
-              className="mt-3 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:bg-surface-overlay transition-colors"
-            >
-              {copiedRpc ? 'Copied' : 'Copy Endpoint'}
             </button>
           </section>
 
