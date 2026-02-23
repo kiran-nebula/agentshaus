@@ -4,15 +4,20 @@ import { useState, useEffect } from 'react';
 import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
 import { truncateAddress } from '@agents-haus/common';
 
-function WalletButtonInner() {
+interface WalletButtonProps {
+  compactOnMobile?: boolean;
+}
+
+function WalletButtonInner({ compactOnMobile = false }: WalletButtonProps) {
   const { ready, authenticated, login, logout, user } = usePrivy();
   const { wallets } = useSolanaWallets();
+  const compactClasses = compactOnMobile ? 'max-w-[11.5rem] sm:max-w-none' : '';
 
   if (!ready) {
     return (
       <button
         disabled
-        className="rounded-full bg-surface-inset px-4 py-1.5 text-sm font-medium text-ink-muted"
+        className={`rounded-full bg-surface-inset px-4 py-1.5 text-sm font-medium text-ink-muted ${compactClasses}`}
       >
         Loading...
       </button>
@@ -26,7 +31,7 @@ function WalletButtonInner() {
       <button
         onClick={logout}
         title="Connected wallet (click to disconnect)"
-        className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface-raised px-3 py-1.5 text-sm text-ink-secondary hover:bg-surface-overlay transition-colors"
+        className={`inline-flex items-center gap-2 rounded-xl border border-border bg-surface-raised px-3 py-1.5 text-sm text-ink-secondary hover:bg-surface-overlay transition-colors ${compactClasses}`}
       >
         <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-brand-500/15 text-brand-700">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -35,9 +40,9 @@ function WalletButtonInner() {
             <path d="M18 12a2 2 0 0 0 0 4h4v-4Z" />
           </svg>
         </span>
-        <span className="text-[11px] font-medium uppercase tracking-wide text-ink-muted">Connected</span>
+        <span className={`text-[11px] font-medium uppercase tracking-wide text-ink-muted ${compactOnMobile ? 'hidden sm:inline' : ''}`}>Connected</span>
         <span className="font-mono text-sm text-ink">
-          {walletAddress ? truncateAddress(walletAddress) : 'Wallet'}
+          {walletAddress ? truncateAddress(walletAddress, compactOnMobile ? 4 : 6) : 'Wallet'}
         </span>
       </button>
     );
@@ -46,14 +51,21 @@ function WalletButtonInner() {
   return (
     <button
       onClick={login}
-      className="rounded-full bg-ink px-5 py-1.5 text-sm font-medium text-surface hover:bg-ink/90 transition-colors"
+      className={`rounded-full bg-ink px-4 py-1.5 text-sm font-medium text-surface hover:bg-ink/90 transition-colors sm:px-5 ${compactClasses}`}
     >
-      Connect Wallet
+      {compactOnMobile ? (
+        <>
+          <span className="sm:hidden">Connect</span>
+          <span className="hidden sm:inline">Connect Wallet</span>
+        </>
+      ) : (
+        'Connect Wallet'
+      )}
     </button>
   );
 }
 
-export function WalletButton() {
+export function WalletButton({ compactOnMobile = false }: WalletButtonProps) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -64,12 +76,14 @@ export function WalletButton() {
     return (
       <button
         disabled
-        className="rounded-full bg-surface-inset px-4 py-1.5 text-sm font-medium text-ink-muted"
+        className={`rounded-full bg-surface-inset px-4 py-1.5 text-sm font-medium text-ink-muted ${
+          compactOnMobile ? 'max-w-[11.5rem] sm:max-w-none' : ''
+        }`}
       >
         Loading...
       </button>
     );
   }
 
-  return <WalletButtonInner />;
+  return <WalletButtonInner compactOnMobile={compactOnMobile} />;
 }

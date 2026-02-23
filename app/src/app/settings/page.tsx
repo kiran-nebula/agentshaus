@@ -112,8 +112,8 @@ export default function SettingsPage() {
   };
 
   return (
-    <main className="px-10 py-8">
-      <section className="mb-6 rounded-2xl border border-border bg-surface-raised px-6 py-6">
+    <main className="px-4 py-6 sm:px-6 sm:py-8 lg:px-10">
+      <section className="mb-6 rounded-2xl border border-border bg-surface-raised px-5 py-5 sm:px-6 sm:py-6">
         <h1 className="text-xl font-semibold text-ink">Settings</h1>
         <p className="mt-1 text-sm text-ink-muted">
           Manage appearance, wallet access, runtime defaults, and notification preferences.

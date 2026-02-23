@@ -19,6 +19,7 @@ function usage() {
 Install options:
   --agent <mint>          Required for install
   --interval <minutes>    Cron interval in minutes (default: ${DEFAULT_INTERVAL_MINUTES})
+  --cron "<expr>"         Full 5-field cron expression (overrides --interval)
   --base-url <url>        API base URL (default: ${DEFAULT_BASE_URL})
   --job-name <name>       Job name tag (default: alpha-maintenance)
   --files-dir <path>      Context file directory for scheduler
@@ -81,23 +82,57 @@ function markerFor(agent, jobName) {
   return `# agentshaus:${agent}:${jobName}`;
 }
 
+function shellEscape(value) {
+  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function resolveNodeBinary() {
+  const fromEnv = (process.env.AGENT_CRON_NODE || '').trim();
+  if (fromEnv) return fromEnv;
+  return process.execPath;
+}
+
+function isValidCronExpression(value) {
+  const fields = value.trim().split(/\s+/);
+  return fields.length === 5;
+}
+
 function buildCronLine({
-  interval,
+  schedule,
+  nodeBinary,
   appDir,
   configFile,
   cronOutFile,
   marker,
 }) {
-  return `*/${interval} * * * * cd ${appDir} && /usr/bin/env node scripts/agent-scheduler.mjs --config ${configFile} >> ${cronOutFile} 2>&1 ${marker}`;
+  const schedulerScript = path.join(appDir, 'scripts', 'agent-scheduler.mjs');
+  return `${schedule} cd ${shellEscape(appDir)} && ${shellEscape(nodeBinary)} ${shellEscape(schedulerScript)} --config ${shellEscape(configFile)} >> ${shellEscape(cronOutFile)} 2>&1 ${marker}`;
 }
 
 async function install(args) {
   const agent = args.agent;
   if (!agent) throw new Error('Missing --agent');
 
-  const interval = Number(args.interval || DEFAULT_INTERVAL_MINUTES);
-  if (!Number.isFinite(interval) || interval < 1 || interval > 59) {
-    throw new Error('Interval must be between 1 and 59 minutes');
+  if (args.cron && args.interval) {
+    throw new Error('Use either --cron or --interval, not both');
+  }
+
+  let schedule;
+  let scheduleLabel;
+  if (typeof args.cron === 'string' && args.cron.trim()) {
+    const raw = args.cron.trim();
+    if (!isValidCronExpression(raw)) {
+      throw new Error('Cron expression must have 5 fields');
+    }
+    schedule = raw;
+    scheduleLabel = raw;
+  } else {
+    const interval = Number(args.interval || DEFAULT_INTERVAL_MINUTES);
+    if (!Number.isFinite(interval) || interval < 1 || interval > 59) {
+      throw new Error('Interval must be between 1 and 59 minutes');
+    }
+    schedule = `*/${interval} * * * *`;
+    scheduleLabel = `every ${interval} minute(s)`;
   }
 
   const jobName = args['job-name'] || 'alpha-maintenance';
@@ -113,6 +148,7 @@ async function install(args) {
   await ensureDir(logsDir);
 
   const appDir = process.cwd();
+  const nodeBinary = resolveNodeBinary();
   const configFile = path.join(jobsDir, `${agent}.${jobName}.json`);
   const logFile = expandHome(args['log-file'] || path.join(logsDir, `${agent}.${jobName}.jsonl`));
   const cronOutFile = path.join(logsDir, `${agent}.${jobName}.cron.log`);
@@ -155,7 +191,8 @@ async function install(args) {
   const filtered = lines.filter((line) => !line.includes(markerFor(agent, jobName)));
   filtered.push(
     buildCronLine({
-      interval,
+      schedule,
+      nodeBinary,
       appDir,
       configFile,
       cronOutFile,
@@ -167,11 +204,12 @@ async function install(args) {
 
   console.log('Installed cron job:');
   console.log(`  agent:     ${agent}`);
-  console.log(`  interval:  every ${interval} minute(s)`);
+  console.log(`  schedule:  ${scheduleLabel}`);
   console.log(`  config:    ${configFile}`);
   console.log(`  run logs:  ${logFile}`);
   console.log(`  cron logs: ${cronOutFile}`);
   console.log(`  files dir: ${filesDir}`);
+  console.log(`  node:      ${nodeBinary}`);
 }
 
 function remove(args) {

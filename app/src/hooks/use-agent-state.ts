@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import type { Address } from '@solana/kit';
 import type { AgentState } from '@agents-haus/sdk';
 import { getAgentStatePda, fetchAgentState } from '@agents-haus/sdk';
@@ -18,19 +18,44 @@ export function useAgentState(soulMint: Address | undefined): UseAgentStateResul
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const { rpc } = useSolanaRpc();
+  const isMountedRef = useRef(true);
+  const requestIdRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      isMountedRef.current = false;
+    },
+    [],
+  );
 
   const refetch = useCallback(async () => {
-    if (!soulMint) return;
-    setIsLoading(true);
-    setError(null);
+    const requestId = ++requestIdRef.current;
+    if (!soulMint) {
+      if (isMountedRef.current && requestId === requestIdRef.current) {
+        setData(null);
+        setError(null);
+        setIsLoading(false);
+      }
+      return;
+    }
+    if (isMountedRef.current && requestId === requestIdRef.current) {
+      setIsLoading(true);
+      setError(null);
+    }
     try {
       const [agentStateAddress] = await getAgentStatePda(soulMint);
       const state = await fetchAgentState(rpc, agentStateAddress);
-      setData(state);
+      if (isMountedRef.current && requestId === requestIdRef.current) {
+        setData(state);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)));
+      if (isMountedRef.current && requestId === requestIdRef.current) {
+        setError(err instanceof Error ? err : new Error(String(err)));
+      }
     } finally {
-      setIsLoading(false);
+      if (isMountedRef.current && requestId === requestIdRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [soulMint, rpc]);
 

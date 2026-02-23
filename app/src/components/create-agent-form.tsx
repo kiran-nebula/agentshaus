@@ -30,6 +30,7 @@ const SUPPORTED_IMAGE_MIME_TYPES = new Set([
   'image/webp',
   'image/gif',
 ]);
+const CREATE_AGENT_TUTORIAL_DISMISSED_KEY = 'create-agent-tutorial-dismissed:v1';
 const KNOWN_QUERY_SKILLS = new Set([
   ...SOLANA_SKILL_PACKS.map((skill) => skill.id),
   'alpha-haus',
@@ -85,7 +86,6 @@ export function CreateAgentForm() {
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
   const [selectedFlavor, setSelectedFlavor] = useState<FlavorProfileId>('alpha-hunter');
-  const [skillsQuery, setSkillsQuery] = useState('');
   const [extraSkills, setExtraSkills] = useState<string[]>([]);
   const [loadedSkillsFromQuery, setLoadedSkillsFromQuery] = useState(false);
   const [strategy, setStrategy] = useState<Strategy>(Strategy.AlphaHunter);
@@ -94,6 +94,7 @@ export function CreateAgentForm() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<'idle' | 'uploading' | 'minting' | 'deploying' | 'done'>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [showTutorialModal, setShowTutorialModal] = useState(false);
 
   const stepIndex = STEPS.indexOf(step);
   const selectedProfile = getFlavorProfile(selectedFlavor);
@@ -102,26 +103,11 @@ export function CreateAgentForm() {
   );
   const alphaProfiles = FLAVOR_PROFILES.filter((profile) => profile.category === 'alpha');
   const generalProfiles = FLAVOR_PROFILES.filter((profile) => profile.category === 'general');
-  const filteredSkillPacks = SOLANA_SKILL_PACKS.filter((skill) => {
-    if (!skillsQuery.trim()) return true;
-    const q = skillsQuery.trim().toLowerCase();
-    return (
-      skill.name.toLowerCase().includes(q) ||
-      skill.slug.toLowerCase().includes(q) ||
-      skill.description.toLowerCase().includes(q)
-    );
-  });
 
   const handleSelectFlavor = (profileId: FlavorProfileId) => {
     const profile = getFlavorProfile(profileId);
     setSelectedFlavor(profileId);
     setStrategy(profile.baseStrategy);
-  };
-
-  const handleToggleSkill = (skillId: string) => {
-    setExtraSkills((prev) =>
-      prev.includes(skillId) ? prev.filter((id) => id !== skillId) : [...prev, skillId],
-    );
   };
 
   useEffect(() => {
@@ -137,6 +123,11 @@ export function CreateAgentForm() {
     setLoadedSkillsFromQuery(true);
   }, [loadedSkillsFromQuery, searchParams]);
 
+  useEffect(() => {
+    const dismissed = localStorage.getItem(CREATE_AGENT_TUTORIAL_DISMISSED_KEY) === '1';
+    setShowTutorialModal(!dismissed);
+  }, []);
+
   useEffect(
     () => () => {
       if (soulImagePreviewUrl) {
@@ -145,6 +136,25 @@ export function CreateAgentForm() {
     },
     [soulImagePreviewUrl],
   );
+
+  useEffect(() => {
+    if (!showTutorialModal) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        localStorage.setItem(CREATE_AGENT_TUTORIAL_DISMISSED_KEY, '1');
+        setShowTutorialModal(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [showTutorialModal]);
+
+  const handleDismissTutorial = () => {
+    localStorage.setItem(CREATE_AGENT_TUTORIAL_DISMISSED_KEY, '1');
+    setShowTutorialModal(false);
+  };
 
   const handleSoulImageSelection = (file: File | null) => {
     if (soulImagePreviewUrl) {
@@ -318,24 +328,33 @@ export function CreateAgentForm() {
   return (
     <div className="space-y-8">
       {/* Progress */}
-      <div className="flex items-center gap-1">
-        {STEPS.map((s, i) => (
-          <div key={s} className="flex items-center">
-            <div
-              className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                i <= stepIndex
-                  ? 'bg-ink text-surface'
-                  : 'bg-surface-inset text-ink-muted'
-              }`}
-            >
-              <span>{i + 1}</span>
-              <span>{STEP_LABELS[s]}</span>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-1">
+          {STEPS.map((s, i) => (
+            <div key={s} className="flex items-center">
+              <div
+                className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                  i <= stepIndex
+                    ? 'bg-ink text-surface'
+                    : 'bg-surface-inset text-ink-muted'
+                }`}
+              >
+                <span>{i + 1}</span>
+                <span>{STEP_LABELS[s]}</span>
+              </div>
+              {i < STEPS.length - 1 && (
+                <div className={`w-8 h-px mx-1 ${i < stepIndex ? 'bg-ink' : 'bg-border'}`} />
+              )}
             </div>
-            {i < STEPS.length - 1 && (
-              <div className={`w-8 h-px mx-1 ${i < stepIndex ? 'bg-ink' : 'bg-border'}`} />
-            )}
-          </div>
-        ))}
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowTutorialModal(true)}
+          className="rounded-full border border-border px-4 py-1.5 text-xs font-medium text-ink-secondary hover:bg-surface-overlay transition-colors"
+        >
+          How this works
+        </button>
       </div>
 
       {error && (
@@ -447,49 +466,6 @@ export function CreateAgentForm() {
               ))}
             </div>
           </div>
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-sm font-medium text-ink">Attach Skill Packs</label>
-              <span className="text-xs text-ink-muted">from `sendaifun/skills`</span>
-            </div>
-            <input
-              type="text"
-              value={skillsQuery}
-              onChange={(e) => setSkillsQuery(e.target.value)}
-              placeholder="Search skill packs..."
-              className="w-full rounded-xl border border-border bg-surface-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none transition-colors"
-            />
-            <div className="mt-3 max-h-48 overflow-y-auto rounded-xl border border-border-light bg-surface-raised p-2">
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {filteredSkillPacks.map((skill) => {
-                  const selected = extraSkills.includes(skill.id);
-                  return (
-                    <button
-                      key={skill.id}
-                      type="button"
-                      onClick={() => handleToggleSkill(skill.id)}
-                      className={`rounded-lg border px-3 py-2 text-left transition-colors ${
-                        selected
-                          ? 'border-ink bg-surface text-ink'
-                          : 'border-border-light bg-surface-raised text-ink-secondary hover:border-border'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium">{skill.name}</span>
-                        <span className="text-[10px] text-ink-muted">{selected ? 'Added' : 'Add'}</span>
-                      </div>
-                      <div className="mt-1 max-h-8 overflow-hidden text-[11px] text-ink-muted">
-                        {skill.description}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <p className="mt-2 text-xs text-ink-muted">
-              Selected skills: {selectedSkills.length}
-            </p>
-          </div>
           <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
             <div className="text-xs text-ink-muted mb-1">Selected profile</div>
             <div className="text-sm font-medium text-ink">{selectedProfile.label}</div>
@@ -561,7 +537,8 @@ export function CreateAgentForm() {
           </div>
           <div className="pt-4 border-t border-border-light text-xs text-ink-muted">
             This mints your Soul NFT, creates agent state on-chain, and then deploys and starts the runtime with your selected
-            profile and skills.
+            profile and skills. After deploy, fund the agent PDA wallet from Agent Settings → Wallet so it can post to
+            Alpha.haus.
           </div>
         </div>
       )}
@@ -598,6 +575,72 @@ export function CreateAgentForm() {
           </button>
         )}
       </div>
+
+      {showTutorialModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-ink/20 backdrop-blur-sm"
+            onClick={handleDismissTutorial}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-agent-tutorial-title"
+            className="relative w-full max-w-xl rounded-2xl border border-border bg-surface-raised p-6 shadow-xl settings-modal-enter"
+          >
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h2 id="create-agent-tutorial-title" className="text-lg font-semibold text-ink">
+                  First Agent Tutorial
+                </h2>
+                <p className="mt-1 text-sm text-ink-secondary">
+                  Follow these two steps to launch correctly.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleDismissTutorial}
+                className="rounded-lg border border-border px-2.5 py-1 text-xs text-ink-muted hover:bg-surface-overlay transition-colors"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="rounded-xl border border-border-light bg-surface p-4">
+                <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-ink-muted">Step 1</div>
+                <div className="text-sm font-medium text-ink">Create and mint a new agent</div>
+                <p className="mt-1 text-sm text-ink-secondary">
+                  Fill out this form, pick your strategy and skills, then mint the Soul NFT.
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-border-light bg-surface p-4">
+                <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-ink-muted">Step 2</div>
+                <div className="text-sm font-medium text-ink">Top up the agent PDA wallet once live</div>
+                <p className="mt-1 text-sm text-ink-secondary">
+                  After deployment, open the agent page and go to Settings → Wallet → Fund to deposit SOL into the agent PDA
+                  wallet.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-brand-500/20 bg-brand-500/10 px-4 py-3 text-sm text-ink-secondary">
+              This agent is configured to post to Alpha.haus, and Alpha.haus actions require SOL in the agent PDA wallet.
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={handleDismissTutorial}
+                className="rounded-full bg-ink px-5 py-2 text-sm font-medium text-surface hover:bg-ink/90 transition-colors"
+              >
+                Start Creating
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

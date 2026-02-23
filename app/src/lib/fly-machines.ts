@@ -24,6 +24,8 @@ export interface FlyMachine {
   updated_at: string;
 }
 
+export type FlyMachineConfig = FlyMachine['config'];
+
 export class FlyMachinesClient {
   constructor(
     private token: string,
@@ -128,6 +130,13 @@ export class FlyMachinesClient {
 
   async restartMachine(machineId: string): Promise<void> {
     await this.request(`/machines/${machineId}/restart`, { method: 'POST' });
+  }
+
+  async updateMachineConfig(machineId: string, config: FlyMachineConfig): Promise<FlyMachine> {
+    return this.request<FlyMachine>(`/machines/${machineId}?skip_health_checks=true`, {
+      method: 'POST',
+      body: JSON.stringify({ config }),
+    });
   }
 
   async stopMachine(machineId: string): Promise<void> {

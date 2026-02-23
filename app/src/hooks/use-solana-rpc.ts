@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
+import { createSolanaRpc } from '@solana/kit';
 
 export function useSolanaRpc() {
   const rpc = useMemo(
@@ -9,10 +9,5 @@ export function useSolanaRpc() {
     [],
   );
 
-  const rpcSubscriptions = useMemo(
-    () => createSolanaRpcSubscriptions(process.env.NEXT_PUBLIC_SOLANA_WS_URL!),
-    [],
-  );
-
-  return { rpc, rpcSubscriptions };
+  return { rpc };
 }

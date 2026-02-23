@@ -40,15 +40,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       >
         <Providers>
           <Sidebar />
-          <div className="pl-[240px] min-h-dvh">
-            <div className="fixed top-0 right-0 z-30 flex h-14 items-center pr-8" style={{ left: '240px' }}>
-              <div className="ml-auto">
-                <WalletButton />
+          <div className="min-h-dvh pt-14 md:pl-[240px]">
+            <div className="fixed inset-x-0 top-0 z-30 h-14 border-b border-border-light bg-surface/90 backdrop-blur-sm md:left-[240px]">
+              <div className="flex h-full items-center px-3 sm:px-4 md:justify-end md:px-8">
+                <div className="ml-auto max-w-full">
+                  <WalletButton compactOnMobile />
+                </div>
               </div>
             </div>
-            <div className="pt-14">
-              {children}
-            </div>
+            <div>{children}</div>
           </div>
         </Providers>
       </body>

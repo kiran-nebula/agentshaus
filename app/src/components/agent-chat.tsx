@@ -13,6 +13,13 @@ interface AgentChatProps {
   isRunning: boolean;
 }
 
+const MAX_CHAT_MESSAGES = 120;
+
+function clampChatMessages(messages: Message[]): Message[] {
+  if (messages.length <= MAX_CHAT_MESSAGES) return messages;
+  return messages.slice(-MAX_CHAT_MESSAGES);
+}
+
 export function AgentChat({ soulMint, isRunning }: AgentChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -53,10 +60,14 @@ export function AgentChat({ soulMint, isRunning }: AgentChatProps) {
     if (!input.trim() || loading) return;
 
     const userMessage = input.trim();
+    const history = clampChatMessages(messages);
     setInput('');
     setError(null);
 
-    const newMessages: Message[] = [...messages, { role: 'user', content: userMessage }];
+    const newMessages: Message[] = clampChatMessages([
+      ...history,
+      { role: 'user', content: userMessage },
+    ]);
     setMessages(newMessages);
     setLoading(true);
 
@@ -66,7 +77,7 @@ export function AgentChat({ soulMint, isRunning }: AgentChatProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: userMessage,
-          history: messages,
+          history,
           model: selectedModel,
         }),
       });
@@ -78,7 +89,12 @@ export function AgentChat({ soulMint, isRunning }: AgentChatProps) {
         return;
       }
 
-      setMessages([...newMessages, { role: 'assistant', content: data.response }]);
+      setMessages(
+        clampChatMessages([
+          ...newMessages,
+          { role: 'assistant', content: data.response },
+        ]),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Network error');
     } finally {

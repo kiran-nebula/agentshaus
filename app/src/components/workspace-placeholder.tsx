@@ -14,13 +14,13 @@ export function WorkspacePlaceholder({
   primaryLabel,
 }: WorkspacePlaceholderProps) {
   return (
-    <main className="px-10 py-8">
+    <main className="px-4 py-6 sm:px-6 sm:py-8 lg:px-10">
       <div className="mb-6">
         <h1 className="text-lg font-semibold text-ink">{title}</h1>
         <p className="mt-1 text-sm text-ink-muted">{description}</p>
       </div>
 
-      <div className="max-w-4xl rounded-2xl border border-border bg-surface-raised px-6 py-10">
+      <div className="max-w-4xl rounded-2xl border border-border bg-surface-raised px-5 py-8 sm:px-6 sm:py-10">
         <p className="text-sm text-ink-secondary">
           This workspace section is now part of the shell layout and ready for deeper tooling.
         </p>

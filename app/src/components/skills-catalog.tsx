@@ -40,8 +40,8 @@ export function SkillsCatalog() {
   };
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-6 py-8">
-      <section className="relative mb-8 overflow-hidden rounded-3xl border border-border-light bg-surface-raised p-8 sm:p-10">
+    <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
+      <section className="relative mb-8 overflow-hidden rounded-3xl border border-border-light bg-surface-raised p-5 sm:p-8 lg:p-10">
         <AnimatedSkillLines variant="light" className="absolute inset-0 h-full w-full opacity-65" />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-surface-raised/95" />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-brand-500/12 via-transparent to-brand-500/8" />
@@ -51,7 +51,7 @@ export function SkillsCatalog() {
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand-500" />
             Solana Skills Directory
           </div>
-          <h1 className="max-w-2xl text-3xl font-semibold leading-tight text-ink sm:text-5xl">
+          <h1 className="max-w-2xl text-2xl font-semibold leading-tight text-ink sm:text-5xl">
             Add skill packs to your agents
           </h1>
           <p className="mt-4 max-w-3xl text-sm text-ink-secondary sm:text-base">
@@ -62,14 +62,14 @@ export function SkillsCatalog() {
               href="https://github.com/sendaifun/skills"
               target="_blank"
               rel="noreferrer"
-              className="rounded-full border border-border bg-surface px-4 py-2 text-xs font-medium text-ink-secondary transition-colors hover:bg-surface-overlay hover:text-ink"
+              className="inline-flex w-full items-center justify-center rounded-full border border-border bg-surface px-4 py-2 text-xs font-medium text-ink-secondary transition-colors hover:bg-surface-overlay hover:text-ink sm:w-auto"
             >
               View Source Repo
             </a>
             <button
               type="button"
               onClick={handleUseSelected}
-              className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-black transition-colors hover:bg-brand-600"
+              className="w-full rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-black transition-colors hover:bg-brand-600 sm:w-auto"
             >
               Use {selectedSkills.length > 0 ? `${selectedSkills.length} Selected` : 'Selected'} in New Agent
             </button>

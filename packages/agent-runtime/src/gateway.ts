@@ -3,6 +3,8 @@
  *
  * Listens on PORT (default 3001) and exposes:
  *   POST /v1/chat/completions — proxies to OpenRouter with tool-use support
+ *   GET  /v1/files/tree        — browse runtime filesystem roots
+ *   POST /v1/files/upload      — upload files into workspace/user-files
  *   GET  /health               — health check
  */
 
@@ -14,12 +16,47 @@ import { autoReclaim } from '../workspace/skills/alpha-haus/tools/auto_reclaim';
 import { buildDcaPlan } from '../workspace/skills/dca-planner/tools/build_dca_plan';
 import { postToX } from '../workspace/skills/social-x/tools/post_to_x';
 import { SOLANA_SKILL_PACKS } from '@agents-haus/common';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_MODEL = (process.env.AGENT_MODEL || 'moonshotai/kimi-k2.5').trim();
 const AGENT_PROFILE_ID = (process.env.AGENT_PROFILE_ID || 'alpha-hunter').trim();
+const RUNTIME_ROOT = process.cwd();
+const WORKSPACE_ROOT = path.join(RUNTIME_ROOT, 'workspace');
+const USER_FILES_ROOT = path.join(WORKSPACE_ROOT, 'user-files');
+const MAX_FILE_UPLOAD_BYTES = Number.parseInt(
+  process.env.AGENT_MAX_UPLOAD_BYTES || `${15 * 1024 * 1024}`,
+  10,
+);
+const MAX_TEXT_READ_BYTES = Number.parseInt(
+  process.env.AGENT_MAX_TEXT_READ_BYTES || `${256 * 1024}`,
+  10,
+);
+const MAX_TREE_DEPTH = 6;
+const MAX_TREE_ENTRIES_PER_DIR = 200;
+
+type FileRootKey = 'user' | 'workspace' | 'runtime' | 'tmp';
+
+const FILE_ROOTS: Record<FileRootKey, { label: string; rootPath: string }> = {
+  user: { label: 'Custom Files', rootPath: USER_FILES_ROOT },
+  workspace: { label: 'Workspace', rootPath: WORKSPACE_ROOT },
+  runtime: { label: 'Runtime', rootPath: RUNTIME_ROOT },
+  tmp: { label: 'Tmp', rootPath: '/tmp' },
+};
+
+type FileTreeNode = {
+  type: 'file' | 'directory';
+  name: string;
+  path: string;
+  sizeBytes: number;
+  modifiedAt: string;
+  childCount?: number;
+  truncated?: boolean;
+  children?: FileTreeNode[];
+};
 
 function parseCsvEnv(value: string | undefined): string[] {
   return (value || '')
@@ -58,6 +95,175 @@ type ToolExecutor = (args: any) => Promise<any>;
 type RuntimeStatus = Record<string, unknown>;
 type RuntimeStatusProvider = () => RuntimeStatus;
 
+function clampInteger(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.trunc(value)));
+}
+
+function normalizeRelativePath(input: string | null | undefined): string {
+  return (input || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\/{2,}/g, '/')
+    .trim();
+}
+
+function parseFileRoot(input: string | null): FileRootKey {
+  if (!input) return 'user';
+  if (input === 'user' || input === 'workspace' || input === 'runtime' || input === 'tmp') {
+    return input;
+  }
+  return 'user';
+}
+
+async function ensureUserFilesRoot(): Promise<void> {
+  await mkdir(USER_FILES_ROOT, { recursive: true });
+}
+
+function resolvePathWithinRoot(
+  root: FileRootKey,
+  relativePath: string | null | undefined,
+): {
+  root: FileRootKey;
+  rootPath: string;
+  absolutePath: string;
+  relativePath: string;
+} {
+  const rootPath = FILE_ROOTS[root].rootPath;
+  const normalized = normalizeRelativePath(relativePath) || '.';
+  const absolutePath = path.resolve(rootPath, normalized);
+
+  if (
+    absolutePath !== rootPath &&
+    !absolutePath.startsWith(`${rootPath}${path.sep}`)
+  ) {
+    throw new Error('Requested path escapes the selected root');
+  }
+
+  const resolvedRelativePath = path.relative(rootPath, absolutePath) || '.';
+  return { root, rootPath, absolutePath, relativePath: resolvedRelativePath };
+}
+
+async function buildFileTreeNode(
+  rootPath: string,
+  absolutePath: string,
+  remainingDepth: number,
+): Promise<FileTreeNode> {
+  const metadata = await stat(absolutePath);
+  const relativePath = path.relative(rootPath, absolutePath) || '.';
+  const node: FileTreeNode = {
+    type: metadata.isDirectory() ? 'directory' : 'file',
+    name: path.basename(absolutePath) || '.',
+    path: relativePath,
+    sizeBytes: metadata.size,
+    modifiedAt: metadata.mtime.toISOString(),
+  };
+
+  if (!metadata.isDirectory() || remainingDepth <= 0) {
+    return node;
+  }
+
+  const entries = await readdir(absolutePath, { withFileTypes: true });
+  const sortedEntries = entries
+    .filter((entry) => !entry.name.startsWith('.'))
+    .sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) {
+        return a.isDirectory() ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+  const limitedEntries = sortedEntries.slice(0, MAX_TREE_ENTRIES_PER_DIR);
+  node.childCount = sortedEntries.length;
+  node.truncated = sortedEntries.length > limitedEntries.length;
+  node.children = [];
+
+  for (const entry of limitedEntries) {
+    if (entry.isSymbolicLink()) continue;
+    const childAbsolutePath = path.join(absolutePath, entry.name);
+    try {
+      node.children.push(
+        await buildFileTreeNode(rootPath, childAbsolutePath, remainingDepth - 1),
+      );
+    } catch {
+      // Skip unreadable files/directories to keep tree rendering resilient.
+    }
+  }
+
+  return node;
+}
+
+function describeFileRoots() {
+  return Object.entries(FILE_ROOTS).map(([key, value]) => ({
+    key,
+    label: value.label,
+    rootPath: value.rootPath,
+  }));
+}
+
+async function listUserFilesForTool(args: {
+  path?: string;
+  depth?: number;
+}) {
+  await ensureUserFilesRoot();
+
+  const requestedDepth =
+    typeof args.depth === 'number' && Number.isFinite(args.depth)
+      ? args.depth
+      : 2;
+  const depth = clampInteger(requestedDepth, 1, 4);
+  const resolved = resolvePathWithinRoot('user', args.path);
+  const tree = await buildFileTreeNode(
+    resolved.rootPath,
+    resolved.absolutePath,
+    depth,
+  );
+
+  return {
+    root: 'user',
+    rootPath: resolved.rootPath,
+    requestedPath: resolved.relativePath,
+    tree,
+  };
+}
+
+async function readUserFileForTool(args: { path?: string; maxBytes?: number }) {
+  if (!args.path || typeof args.path !== 'string' || !args.path.trim()) {
+    throw new Error('path is required');
+  }
+
+  await ensureUserFilesRoot();
+
+  const resolved = resolvePathWithinRoot('user', args.path);
+  const metadata = await stat(resolved.absolutePath);
+  if (metadata.isDirectory()) {
+    throw new Error('path points to a directory');
+  }
+
+  const requestedLimit =
+    typeof args.maxBytes === 'number' && Number.isFinite(args.maxBytes)
+      ? args.maxBytes
+      : MAX_TEXT_READ_BYTES;
+  const maxBytes = clampInteger(requestedLimit, 256, MAX_TEXT_READ_BYTES);
+
+  if (metadata.size > maxBytes) {
+    throw new Error(
+      `File is ${metadata.size} bytes. Increase maxBytes (up to ${MAX_TEXT_READ_BYTES}) or read a smaller file.`,
+    );
+  }
+
+  const buffer = await readFile(resolved.absolutePath);
+  if (buffer.includes(0)) {
+    throw new Error('File appears to be binary and cannot be returned as text');
+  }
+
+  return {
+    path: resolved.relativePath,
+    sizeBytes: metadata.size,
+    modifiedAt: metadata.mtime.toISOString(),
+    content: buffer.toString('utf8'),
+  };
+}
+
 function buildSystemPrompt(): string {
   const sections: string[] = [];
 
@@ -72,6 +278,15 @@ function buildSystemPrompt(): string {
       '- If a tool returns an error, explain it and propose the next safe action.',
       '- This runtime supports machine-level scheduled automation while online.',
       '- If asked about cron/scheduling, explain current scheduler behavior and configuration knobs.',
+    ].join('\n'),
+  );
+  sections.push(
+    [
+      '## Files',
+      '- Custom user uploads are stored under workspace/user-files on this machine.',
+      '- Use list_user_files to inspect available files/folders.',
+      '- Use read_user_file to read text files from workspace/user-files.',
+      '- Do not claim to have read a file unless read_user_file returned it.',
     ].join('\n'),
   );
 
@@ -277,6 +492,55 @@ function buildToolDefinitions(): ToolDefinition[] {
     });
   }
 
+  definitions.push(
+    {
+      type: 'function',
+      function: {
+        name: 'list_user_files',
+        description:
+          'List files and directories under workspace/user-files for this agent runtime.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: {
+              type: 'string',
+              description:
+                "Relative path under workspace/user-files. Defaults to root '.'",
+            },
+            depth: {
+              type: 'number',
+              description: 'Directory recursion depth (1-4). Defaults to 2.',
+            },
+          },
+          required: [],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_user_file',
+        description:
+          'Read a UTF-8 text file from workspace/user-files. Use list_user_files first to find paths.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: {
+              type: 'string',
+              description: 'Relative file path under workspace/user-files.',
+            },
+            maxBytes: {
+              type: 'number',
+              description:
+                `Maximum bytes to read (256-${MAX_TEXT_READ_BYTES}). Defaults to ${MAX_TEXT_READ_BYTES}.`,
+            },
+          },
+          required: ['path'],
+        },
+      },
+    },
+  );
+
   return definitions;
 }
 
@@ -302,6 +566,10 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
         post_to_x: (args: any) => postToX(args),
       }
     : {}),
+  list_user_files: (args: { path?: string; depth?: number }) =>
+    listUserFilesForTool(args || {}),
+  read_user_file: (args: { path?: string; maxBytes?: number }) =>
+    readUserFileForTool(args || {}),
 };
 
 const MUTATING_TOOLS = new Set([
@@ -444,6 +712,9 @@ export function startGateway(options?: { getRuntimeStatus?: RuntimeStatusProvide
       ENABLED_SKILLS,
     ).join(',') || '(default:alpha-haus)'}`,
   );
+  void ensureUserFilesRoot().catch((err) => {
+    console.error('[gateway] Failed to initialize user-files directory:', err);
+  });
 
   const server = Bun.serve({
     port: PORT,
@@ -468,8 +739,106 @@ export function startGateway(options?: { getRuntimeStatus?: RuntimeStatusProvide
           profile: AGENT_PROFILE_ID,
           model: DEFAULT_MODEL,
           skills: Array.from(ENABLED_SKILLS),
+          files: {
+            roots: describeFileRoots(),
+            maxUploadBytes: MAX_FILE_UPLOAD_BYTES,
+            maxTextReadBytes: MAX_TEXT_READ_BYTES,
+          },
           runtime,
         });
+      }
+
+      if (url.pathname === '/v1/files/tree' && req.method === 'GET') {
+        try {
+          const root = parseFileRoot(url.searchParams.get('root'));
+          const pathParam = url.searchParams.get('path');
+          const depthParam = Number.parseInt(
+            url.searchParams.get('depth') || '3',
+            10,
+          );
+          const depth = clampInteger(
+            Number.isFinite(depthParam) ? depthParam : 3,
+            1,
+            MAX_TREE_DEPTH,
+          );
+
+          if (root === 'user') {
+            await ensureUserFilesRoot();
+          }
+
+          const resolved = resolvePathWithinRoot(root, pathParam);
+          const tree = await buildFileTreeNode(
+            resolved.rootPath,
+            resolved.absolutePath,
+            depth,
+          );
+
+          return Response.json({
+            root,
+            roots: describeFileRoots(),
+            rootPath: resolved.rootPath,
+            requestedPath: resolved.relativePath,
+            depth,
+            tree,
+          });
+        } catch (err) {
+          return Response.json(
+            { error: err instanceof Error ? err.message : 'Failed to list files' },
+            { status: 400 },
+          );
+        }
+      }
+
+      if (url.pathname === '/v1/files/upload' && req.method === 'POST') {
+        try {
+          await ensureUserFilesRoot();
+
+          const formData = await req.formData();
+          const file = formData.get('file');
+          if (!(file instanceof File)) {
+            return Response.json({ error: 'file is required' }, { status: 400 });
+          }
+
+          if (file.size > MAX_FILE_UPLOAD_BYTES) {
+            return Response.json(
+              {
+                error: `File exceeds max upload size (${MAX_FILE_UPLOAD_BYTES} bytes)`,
+              },
+              { status: 400 },
+            );
+          }
+
+          const pathField = formData.get('path');
+          const requestedPath =
+            typeof pathField === 'string' ? normalizeRelativePath(pathField) : '';
+          const safeFilename = path.basename(file.name || `upload-${Date.now()}`);
+          const finalRelativePath =
+            requestedPath.length > 0
+              ? requestedPath.endsWith('/')
+                ? `${requestedPath}${safeFilename}`
+                : requestedPath
+              : safeFilename;
+
+          const resolved = resolvePathWithinRoot('user', finalRelativePath);
+          await mkdir(path.dirname(resolved.absolutePath), { recursive: true });
+
+          const bytes = Buffer.from(await file.arrayBuffer());
+          await writeFile(resolved.absolutePath, bytes);
+
+          return Response.json({
+            ok: true,
+            root: 'user',
+            path: resolved.relativePath,
+            sizeBytes: bytes.length,
+            mimeType: file.type || 'application/octet-stream',
+            uploadedAt: new Date().toISOString(),
+          });
+        } catch (err) {
+          return Response.json(
+            { error: err instanceof Error ? err.message : 'Failed to upload file' },
+            { status: 400 },
+          );
+        }
       }
 
       if (url.pathname === '/v1/chat/completions' && req.method === 'POST') {

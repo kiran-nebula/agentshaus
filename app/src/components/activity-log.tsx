@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import type { Address } from '@solana/kit';
 import { getAgentWalletPda } from '@agents-haus/sdk';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
@@ -16,8 +16,21 @@ export function ActivityLog({ agentId }: { agentId: string }) {
   const { rpc } = useSolanaRpc();
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const isMountedRef = useRef(true);
+  const requestIdRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      isMountedRef.current = false;
+    },
+    [],
+  );
 
   const fetchActivity = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+    if (isMountedRef.current && requestId === requestIdRef.current) {
+      setLoading(true);
+    }
     try {
       const [agentWallet] = await getAgentWalletPda(agentId as Address);
 
@@ -32,11 +45,15 @@ export function ActivityLog({ agentId }: { agentId: string }) {
         memo: sig.memo || undefined,
       }));
 
-      setActivities(items);
+      if (isMountedRef.current && requestId === requestIdRef.current) {
+        setActivities(items);
+      }
     } catch (err) {
       console.error('Failed to fetch activity:', err);
     } finally {
-      setLoading(false);
+      if (isMountedRef.current && requestId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
   }, [agentId, rpc]);
 

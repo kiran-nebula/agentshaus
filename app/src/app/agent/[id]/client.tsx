@@ -48,8 +48,22 @@ interface Message {
   content: string;
 }
 
+interface CronJobInfo {
+  schedule: string;
+  command: string;
+  marker: string;
+  jobName: string | null;
+  raw: string;
+}
+
 const CHAT_STORAGE_VERSION = 1;
 const MAX_PERSISTED_CHAT_MESSAGES = 120;
+const MAX_CHAT_MESSAGES = 120;
+
+function clampChatMessages(messages: Message[]): Message[] {
+  if (messages.length <= MAX_CHAT_MESSAGES) return messages;
+  return messages.slice(-MAX_CHAT_MESSAGES);
+}
 
 function isPersistedMessage(value: unknown): value is Message {
   return (
@@ -314,6 +328,10 @@ function SettingsModal({
   const [showExecutorInput, setShowExecutorInput] = useState(false);
   const [fundMode, setFundMode] = useState<'fund' | 'withdraw' | null>(null);
   const [fundAmount, setFundAmount] = useState('');
+  const [cronJobs, setCronJobs] = useState<CronJobInfo[]>([]);
+  const [cronLoading, setCronLoading] = useState(false);
+  const [cronAvailable, setCronAvailable] = useState<boolean | null>(null);
+  const [cronError, setCronError] = useState<string | null>(null);
 
   const handleToggleActive = async () => {
     if (!authenticated) { login(); return; }
@@ -406,19 +424,73 @@ function SettingsModal({
     }
   };
 
+  const fetchCronJobs = useCallback(async () => {
+    setCronLoading(true);
+    setCronError(null);
+
+    try {
+      const res = await fetch(`/api/agent/${soulMint}/cron`, { cache: 'no-store' });
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to fetch cron jobs');
+      }
+
+      const jobs = Array.isArray(data?.jobs)
+        ? data.jobs.filter(
+            (value: unknown): value is CronJobInfo =>
+              typeof value === 'object' &&
+              value !== null &&
+              typeof (value as { schedule?: unknown }).schedule === 'string' &&
+              typeof (value as { command?: unknown }).command === 'string' &&
+              typeof (value as { marker?: unknown }).marker === 'string' &&
+              typeof (value as { raw?: unknown }).raw === 'string',
+          )
+        : [];
+
+      setCronJobs(jobs);
+      setCronAvailable(
+        typeof data?.available === 'boolean' ? data.available : true,
+      );
+
+      if (data?.ok === false && typeof data?.error === 'string') {
+        setCronError(data.error);
+      }
+    } catch (err) {
+      setCronJobs([]);
+      setCronAvailable(null);
+      setCronError(err instanceof Error ? err.message : 'Failed to fetch cron jobs');
+    } finally {
+      setCronLoading(false);
+    }
+  }, [soulMint]);
+
+  useEffect(() => {
+    if (activeTab !== 'runtime') return;
+
+    void fetchCronJobs();
+    const intervalId = setInterval(() => {
+      void fetchCronJobs();
+    }, 30_000);
+
+    return () => clearInterval(intervalId);
+  }, [activeTab, fetchCronJobs]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
       <div className="absolute inset-0 bg-ink/20 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-[680px] bg-surface-raised border border-border rounded-2xl shadow-xl settings-modal-enter flex overflow-hidden" style={{ height: 'min(520px, 80vh)' }}>
+      <div className="settings-modal-enter relative flex h-[100dvh] w-full flex-col overflow-hidden bg-surface-raised shadow-xl sm:h-[min(520px,80vh)] sm:max-w-[680px] sm:flex-row sm:rounded-2xl sm:border sm:border-border">
         {/* Left nav */}
-        <div className="w-44 shrink-0 border-r border-border-light py-5 px-3 flex flex-col">
-          <h2 className="text-xs font-semibold text-ink-muted uppercase tracking-wider px-3 mb-3">Settings</h2>
-          <nav className="flex flex-col gap-0.5">
+        <div className="shrink-0 border-b border-border-light px-3 py-3 sm:w-44 sm:border-b-0 sm:border-r sm:px-3 sm:py-5">
+          <h2 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wider text-ink-muted sm:mb-3 sm:px-3">
+            Settings
+          </h2>
+          <nav className="flex gap-1 overflow-x-auto sm:flex-col sm:gap-0.5">
             {SETTINGS_TABS.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-left ${
+                className={`flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors ${
                   activeTab === tab.id
                     ? 'bg-surface-overlay text-ink'
                     : 'text-ink-secondary hover:bg-surface-overlay/50 hover:text-ink'
@@ -434,14 +506,14 @@ function SettingsModal({
         {/* Right content */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Close button */}
-          <div className="flex justify-end px-4 pt-4 pb-0">
+          <div className="flex justify-end px-4 pb-0 pt-3 sm:pt-4">
             <button onClick={onClose} className="rounded-lg p-1.5 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors">
               <IconX />
             </button>
           </div>
 
           {/* Content area */}
-          <div className="flex-1 overflow-y-auto px-6 pb-6 pt-2">
+          <div className="flex-1 overflow-y-auto px-4 pb-5 pt-2 sm:px-6 sm:pb-6">
             {error && <div className="rounded-xl border border-danger/20 bg-danger/5 px-4 py-2 text-xs text-danger mb-4">{error}</div>}
 
             {/* General tab */}
@@ -503,10 +575,10 @@ function SettingsModal({
                     <button onClick={() => setShowExecutorInput(true)} className="text-xs text-brand-500 hover:text-brand-700 font-medium transition-colors">Change executor</button>
                   )}
                   {isOwner && showExecutorInput && (
-                    <div className="flex gap-2 mt-1">
-                      <input value={newExecutor} onChange={(e) => setNewExecutor(e.target.value)} placeholder="New executor pubkey" className="flex-1 rounded-xl border border-border bg-surface px-3 py-1.5 text-xs font-mono text-ink focus:border-ink focus:outline-none transition-colors" />
-                      <button onClick={handleUpdateExecutor} disabled={loading} className="rounded-full bg-ink px-3 py-1.5 text-xs font-medium text-surface disabled:opacity-50">Save</button>
-                      <button onClick={() => { setShowExecutorInput(false); setNewExecutor(''); }} className="text-xs text-ink-muted hover:text-ink-secondary transition-colors">Cancel</button>
+                    <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <input value={newExecutor} onChange={(e) => setNewExecutor(e.target.value)} placeholder="New executor pubkey" className="w-full rounded-xl border border-border bg-surface px-3 py-1.5 text-xs font-mono text-ink transition-colors focus:border-ink focus:outline-none sm:flex-1" />
+                      <button onClick={handleUpdateExecutor} disabled={loading} className="w-full rounded-full bg-ink px-3 py-1.5 text-xs font-medium text-surface disabled:opacity-50 sm:w-auto">Save</button>
+                      <button onClick={() => { setShowExecutorInput(false); setNewExecutor(''); }} className="text-left text-xs text-ink-muted transition-colors hover:text-ink-secondary sm:text-center">Cancel</button>
                     </div>
                   )}
                 </div>
@@ -568,7 +640,7 @@ function SettingsModal({
                         )}
                       </div>
                       {isOwner && (
-                        <div className="flex gap-2 pt-1">
+                        <div className="flex flex-col gap-2 pt-1 sm:flex-row">
                           <button onClick={handleDeployRuntime} disabled={loading} className="flex-1 rounded-xl bg-brand-500 px-3 py-2 text-xs font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50">Redeploy</button>
                           {machineState === 'stopped' && (
                             <button onClick={() => onMachineAction('start')} disabled={loading} className="flex-1 rounded-xl bg-success/10 text-success px-3 py-2 text-xs font-medium hover:bg-success/15 transition-colors disabled:opacity-50">Start</button>
@@ -578,6 +650,58 @@ function SettingsModal({
                           )}
                         </div>
                       )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-border-light p-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-sm font-medium text-ink">Local Cron Jobs</div>
+                    <button
+                      onClick={() => {
+                        void fetchCronJobs();
+                      }}
+                      disabled={cronLoading}
+                      className="rounded-full border border-border px-2.5 py-1 text-[10px] font-medium text-ink-secondary hover:bg-surface-overlay transition-colors disabled:opacity-50"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                  <div className="text-xs text-ink-muted mb-3">
+                    Jobs installed via <span className="font-mono">agent-cron.mjs</span> on this host.
+                  </div>
+
+                  {cronLoading && (
+                    <div className="text-xs text-ink-muted">Loading cron jobs…</div>
+                  )}
+
+                  {!cronLoading && cronAvailable === false && (
+                    <div className="rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2 text-xs text-warning">
+                      {cronError || 'crontab is not available in this environment.'}
+                    </div>
+                  )}
+
+                  {!cronLoading && cronAvailable !== false && cronJobs.length === 0 && (
+                    <div className="text-xs text-ink-muted">No active cron jobs for this agent.</div>
+                  )}
+
+                  {!cronLoading && cronAvailable !== false && cronJobs.length > 0 && (
+                    <div className="space-y-2">
+                      {cronJobs.map((job) => (
+                        <div key={`${job.marker}:${job.schedule}`} className="rounded-lg border border-border-light bg-surface-inset px-2.5 py-2">
+                          <div className="flex items-center justify-between gap-2 text-[10px] mb-1">
+                            <span className="text-ink-muted">{job.jobName || 'job'}</span>
+                            <span className="font-mono text-ink">{job.schedule || '—'}</span>
+                          </div>
+                          <div className="font-mono text-[10px] text-ink-muted break-all">{job.command}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {!cronLoading && cronAvailable !== false && cronError && (
+                    <div className="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2 text-xs text-warning">
+                      {cronError}
                     </div>
                   )}
                 </div>
@@ -593,7 +717,7 @@ function SettingsModal({
                     {lamportsToSol(walletBalance).toFixed(4)} <span className="text-sm text-ink-muted font-sans font-normal">SOL</span>
                   </div>
                   {fundMode === null ? (
-                    <div className="flex gap-2">
+                    <div className="flex flex-col gap-2 sm:flex-row">
                       <button onClick={() => setFundMode('fund')} className="flex-1 rounded-full bg-ink px-4 py-2.5 text-sm font-medium text-surface hover:bg-ink/90 transition-colors">Fund</button>
                       {isOwner && (
                         <button onClick={() => setFundMode('withdraw')} className="flex-1 rounded-full border border-border px-4 py-2.5 text-sm font-medium text-ink-secondary hover:bg-surface-overlay transition-colors">Withdraw</button>
@@ -601,11 +725,11 @@ function SettingsModal({
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      <div className="flex items-center gap-2">
-                        <input type="number" step="0.001" min="0" value={fundAmount} onChange={(e) => setFundAmount(e.target.value)} placeholder="0.00" className="flex-1 rounded-xl border border-border bg-surface px-3 py-2.5 text-ink font-mono text-sm focus:border-ink focus:outline-none transition-colors" />
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <input type="number" step="0.001" min="0" value={fundAmount} onChange={(e) => setFundAmount(e.target.value)} placeholder="0.00" className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm font-mono text-ink transition-colors focus:border-ink focus:outline-none sm:flex-1" />
                         <span className="text-sm text-ink-muted">SOL</span>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex flex-col gap-2 sm:flex-row">
                         <button onClick={handleFundAction} disabled={loading} className="flex-1 rounded-full bg-ink px-4 py-2.5 text-sm font-medium text-surface disabled:opacity-50">
                           {loading ? 'Processing...' : fundMode === 'fund' ? 'Deposit' : 'Withdraw'}
                         </button>
@@ -754,9 +878,11 @@ export function AgentDetailClient({ soulMint }: Props) {
       };
 
       if (Array.isArray(parsed.messages)) {
-        const persistedMessages = parsed.messages
-          .filter(isPersistedMessage)
-          .slice(-MAX_PERSISTED_CHAT_MESSAGES);
+        const persistedMessages = clampChatMessages(
+          parsed.messages
+            .filter(isPersistedMessage)
+            .slice(-MAX_PERSISTED_CHAT_MESSAGES),
+        );
         setMessages(persistedMessages);
       }
 
@@ -776,7 +902,7 @@ export function AgentDetailClient({ soulMint }: Props) {
       localStorage.setItem(
         chatStorageKey,
         JSON.stringify({
-          messages: messages.slice(-MAX_PERSISTED_CHAT_MESSAGES),
+          messages: clampChatMessages(messages).slice(-MAX_PERSISTED_CHAT_MESSAGES),
           selectedModel,
           updatedAt: new Date().toISOString(),
         }),
@@ -917,20 +1043,29 @@ export function AgentDetailClient({ soulMint }: Props) {
   const sendMessage = async () => {
     if (!input.trim() || chatLoading) return;
     const userMessage = input.trim();
+    const history = clampChatMessages(messages);
     setInput('');
     setChatError(null);
-    const newMessages: Message[] = [...messages, { role: 'user', content: userMessage }];
+    const newMessages: Message[] = clampChatMessages([
+      ...history,
+      { role: 'user', content: userMessage },
+    ]);
     setMessages(newMessages);
     setChatLoading(true);
     try {
       const res = await fetch(`/api/agent/${soulMint}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage, history: messages, model: selectedModel }),
+        body: JSON.stringify({ message: userMessage, history, model: selectedModel }),
       });
       const data = await res.json();
       if (!res.ok) { setChatError(data.error || 'Failed to get response'); return; }
-      setMessages([...newMessages, { role: 'assistant', content: data.response }]);
+      setMessages(
+        clampChatMessages([
+          ...newMessages,
+          { role: 'assistant', content: data.response },
+        ]),
+      );
     } catch (err) {
       setChatError(err instanceof Error ? err.message : 'Network error');
     } finally {
@@ -1041,11 +1176,11 @@ export function AgentDetailClient({ soulMint }: Props) {
     machineState === 'restarting';
 
   return (
-    <div className="flex h-[calc(100dvh-3.5rem)]">
+    <div className="flex h-[calc(100dvh-3.5rem)] overflow-hidden">
       {/* Main chat area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
-        <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border-light shrink-0">
+        <div className="flex shrink-0 items-center gap-3 border-b border-border-light px-3 py-2.5 sm:px-4">
           <Link href="/dashboard" className="rounded-lg p-1.5 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors">
             <IconBack />
           </Link>
@@ -1072,7 +1207,7 @@ export function AgentDetailClient({ soulMint }: Props) {
             </button>
             <button
               onClick={() => setShowPanel(!showPanel)}
-              className={`rounded-lg p-1.5 transition-colors ${showPanel ? 'text-brand-500 bg-brand-500/10' : 'text-ink-muted hover:text-ink hover:bg-surface-overlay'}`}
+              className={`hidden rounded-lg p-1.5 transition-colors md:inline-flex ${showPanel ? 'text-brand-500 bg-brand-500/10' : 'text-ink-muted hover:text-ink hover:bg-surface-overlay'}`}
               title="Toggle info panel"
             >
               <IconPanel />
@@ -1083,7 +1218,7 @@ export function AgentDetailClient({ soulMint }: Props) {
         {/* Chat body */}
         {!isRunning && !hasMessages ? (
           isBooting ? (
-            <div className="flex-1 flex flex-col items-center justify-center px-6">
+            <div className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6">
               <div className="relative mb-6 h-28 w-28">
                 <div className="absolute inset-[14px] rounded-full border border-brand-500/30 animate-pulse" />
                 <div className="absolute inset-0 animate-[spin_7s_linear_infinite]">
@@ -1102,7 +1237,7 @@ export function AgentDetailClient({ soulMint }: Props) {
               </p>
             </div>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center px-6">
+            <div className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6">
               <div className="w-full max-w-md rounded-2xl border border-border-light bg-surface-raised px-6 py-8 text-center">
                 <div className="mx-auto mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-surface">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="text-ink-muted">
@@ -1147,8 +1282,8 @@ export function AgentDetailClient({ soulMint }: Props) {
             </div>
           )
         ) : !hasMessages ? (
-          <div className="flex-1 flex flex-col items-center justify-center px-6 pb-16">
-            <h2 className="text-2xl font-semibold text-ink mb-10">What should your agent do?</h2>
+          <div className="flex-1 flex flex-col items-center justify-center px-4 pb-10 sm:px-6 sm:pb-16">
+            <h2 className="mb-6 text-xl font-semibold text-ink sm:mb-10 sm:text-2xl">What should your agent do?</h2>
             <div className="w-full max-w-2xl">
               <div className="rounded-2xl border border-border bg-surface-raised shadow-sm">
                 <textarea
@@ -1158,9 +1293,9 @@ export function AgentDetailClient({ soulMint }: Props) {
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
                   placeholder="Ask anything..."
                   rows={1}
-                  className="w-full resize-none bg-transparent px-5 pt-5 pb-2 text-base text-ink placeholder:text-ink-muted focus:outline-none"
+                  className="w-full resize-none bg-transparent px-4 pb-2 pt-4 text-sm text-ink placeholder:text-ink-muted focus:outline-none sm:px-5 sm:pt-5 sm:text-base"
                 />
-                <div className="flex items-center justify-between px-4 pb-3.5">
+                <div className="flex items-center justify-between px-3 pb-3 sm:px-4 sm:pb-3.5">
                   <ModelSelector
                     modelRef={modelRef}
                     modelOpen={modelOpen}
@@ -1181,11 +1316,11 @@ export function AgentDetailClient({ soulMint }: Props) {
         ) : (
           <>
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto px-4 py-6">
-              <div className="max-w-2xl mx-auto space-y-5">
+            <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-4 sm:py-6">
+              <div className="mx-auto max-w-2xl space-y-4 sm:space-y-5">
                 {messages.map((msg, i) => (
                   <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[80%] rounded-2xl px-5 py-3 text-[15px] leading-relaxed ${
+                    <div className={`max-w-[92%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed sm:max-w-[80%] sm:px-5 sm:py-3 sm:text-[15px] ${
                       msg.role === 'user'
                         ? 'bg-ink text-surface rounded-br-md'
                         : 'bg-surface-raised border border-border-light text-ink rounded-bl-md'
@@ -1196,7 +1331,7 @@ export function AgentDetailClient({ soulMint }: Props) {
                 ))}
                 {chatLoading && (
                   <div className="flex justify-start">
-                    <div className="bg-surface-raised border border-border-light rounded-2xl rounded-bl-md px-5 py-3 text-[15px] text-ink-muted">
+                    <div className="rounded-2xl rounded-bl-md border border-border-light bg-surface-raised px-4 py-2.5 text-sm text-ink-muted sm:px-5 sm:py-3 sm:text-[15px]">
                       <span className="inline-flex gap-1">
                         <span className="animate-bounce" style={{ animationDelay: '0ms' }}>.</span>
                         <span className="animate-bounce" style={{ animationDelay: '150ms' }}>.</span>
@@ -1211,7 +1346,7 @@ export function AgentDetailClient({ soulMint }: Props) {
             </div>
 
             {/* Bottom input */}
-            <div className="shrink-0 border-t border-border-light px-4 py-3">
+            <div className="shrink-0 border-t border-border-light px-3 py-3 sm:px-4">
               <div className="max-w-2xl mx-auto">
                 <div className="rounded-2xl border border-border bg-surface-raised">
                   <textarea
@@ -1222,9 +1357,9 @@ export function AgentDetailClient({ soulMint }: Props) {
                     placeholder="Message your agent..."
                     disabled={chatLoading}
                     rows={1}
-                    className="w-full resize-none bg-transparent px-5 pt-4 pb-1.5 text-base text-ink placeholder:text-ink-muted focus:outline-none disabled:opacity-50"
+                    className="w-full resize-none bg-transparent px-4 pb-1.5 pt-3.5 text-sm text-ink placeholder:text-ink-muted focus:outline-none disabled:opacity-50 sm:px-5 sm:pt-4 sm:text-base"
                   />
-                  <div className="flex items-center justify-between px-4 pb-3">
+                  <div className="flex items-center justify-between px-3 pb-2.5 sm:px-4 sm:pb-3">
                     <ModelSelector
                       modelRef={modelRef}
                       modelOpen={modelOpen}
