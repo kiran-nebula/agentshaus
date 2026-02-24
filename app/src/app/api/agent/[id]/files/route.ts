@@ -117,11 +117,22 @@ async function enforceWalletOwnership(
     return NextResponse.json({ error: 'Agent Soul NFT not found' }, { status: 404 });
   }
 
+  const identityToken =
+    request.headers.get('x-privy-identity-token') ||
+    request.headers.get('x-privy-id-token');
+
   try {
-    const isOwner = await isWalletLinkedToPrivyUser(userId, String(currentOwner));
+    const isOwner = await isWalletLinkedToPrivyUser(
+      userId,
+      String(currentOwner),
+      { idToken: identityToken },
+    );
     if (!isOwner) {
       return NextResponse.json(
-        { error: 'Only the current Soul NFT owner can access agent files' },
+        {
+          error: 'Only the current Soul NFT owner can access agent files',
+          currentOwner: String(currentOwner),
+        },
         { status: 403 },
       );
     }

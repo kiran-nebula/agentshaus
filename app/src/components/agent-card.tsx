@@ -9,6 +9,8 @@ interface AgentCardProps {
   name: string;
   strategy: Strategy;
   isActive: boolean;
+  machineDeployed: boolean;
+  machineState: string | null;
   totalTips: bigint;
   totalBurns: bigint;
   balance: bigint;
@@ -20,6 +22,8 @@ export function AgentCard({
   name,
   strategy,
   isActive,
+  machineDeployed,
+  machineState,
   totalTips,
   totalBurns,
   balance,
@@ -44,25 +48,40 @@ export function AgentCard({
     }
   };
 
+  const normalizedMachineState = machineState?.toLowerCase() ?? null;
+  const machineRunning =
+    machineDeployed &&
+    (normalizedMachineState === 'started' || normalizedMachineState === 'starting');
+  const machineLabel = !machineDeployed
+    ? 'Not deployed'
+    : machineState || 'Unknown';
+  const machineBadgeClass = machineRunning
+    ? 'bg-success/10 text-success'
+    : 'bg-surface-inset text-ink-muted';
+  const machineDotClass = machineRunning ? 'bg-success' : 'bg-ink-muted';
+
   return (
     <Link href={`/agent/${soulMint}`}>
       <div className="group rounded-2xl border border-border bg-surface-raised p-5 hover:border-brand-500/30 hover:shadow-sm transition-all cursor-pointer">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-ink">{name}</h3>
-          <span
-            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-              isActive
-                ? 'bg-success/10 text-success'
-                : 'bg-surface-inset text-ink-muted'
-            }`}
-          >
-            <span className={`inline-block h-1.5 w-1.5 rounded-full ${isActive ? 'bg-success' : 'bg-ink-muted'}`} />
-            {isActive ? 'Active' : 'Paused'}
+          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${machineBadgeClass}`}>
+            <span className={`inline-block h-1.5 w-1.5 rounded-full ${machineDotClass}`} />
+            {machineLabel}
           </span>
         </div>
 
         <div className="mb-2 font-mono text-[11px] text-ink-muted">{truncateAddress(soulMint, 6)}</div>
-        <div className="text-xs text-ink-secondary mb-4">{STRATEGY_LABELS[strategy]}</div>
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-ink-secondary">{STRATEGY_LABELS[strategy]}</span>
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+              isActive ? 'bg-success/10 text-success' : 'bg-surface-inset text-ink-muted'
+            }`}
+          >
+            {isActive ? 'Policy active' : 'Policy paused'}
+          </span>
+        </div>
 
         <div className="mb-4 rounded-lg border border-border-light bg-surface px-3 py-2">
           <div className="mb-1 flex items-center justify-between">

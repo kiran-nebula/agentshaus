@@ -12,6 +12,7 @@ const ALPHA_RUNTIME_PROFILES = new Set([
   'balanced',
   'vibes-poster',
 ]);
+const MAX_RUNTIME_SOUL_TEXT_LENGTH = 4_000;
 
 function getRpc(): Rpc<SolanaRpcApi> {
   if (!rpc) {
@@ -81,6 +82,15 @@ function parseIntInRange(
 
   if (!Number.isFinite(candidate)) return null;
   return Math.max(min, Math.min(max, candidate));
+}
+
+function normalizeRuntimeSoulText(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\r/g, '')
+    .replace(/\u0000/g, '')
+    .trim()
+    .slice(0, MAX_RUNTIME_SOUL_TEXT_LENGTH);
 }
 
 async function deriveExecutorAddress(executorKeypair: string): Promise<string> {
@@ -160,7 +170,7 @@ export async function POST(
 
     // 2. Parse request body
     const body = await request.json();
-    const { force, profileId, skills, model, scheduler } = body;
+    const { force, profileId, skills, model, scheduler, soulText } = body;
     const sharedExecutorKeypair = getSharedExecutorKeypair();
     let runtimeExecutor: string;
     try {
@@ -225,10 +235,15 @@ export async function POST(
       schedulerModeRaw.toLowerCase() === 'alpha-maintenance'
         ? 'alpha-maintenance'
         : 'alpha-maintenance';
+    const requestedSoulText = normalizeRuntimeSoulText(soulText);
 
     // 3. Check if machine already exists
     const fly = getFlyClient();
     const existing = await fly.findMachineForAgent(soulMint);
+    const existingSoulText = normalizeRuntimeSoulText(
+      existing?.config?.env?.AGENT_SOUL_TEXT,
+    );
+    const runtimeSoulText = requestedSoulText || existingSoulText;
     if (existing) {
       if (!force) {
         return NextResponse.json(
@@ -282,6 +297,7 @@ export async function POST(
         AGENT_PROFILE_ID: normalizedProfileId,
         AGENT_SKILLS: normalizedSkills.join(','),
         AGENT_MODEL: normalizedModel,
+        AGENT_SOUL_TEXT: runtimeSoulText,
         RUNTIME_SCHEDULER_ENABLED: schedulerEnabled ? 'true' : 'false',
         RUNTIME_SCHEDULER_INTERVAL_MINUTES: String(schedulerIntervalMinutes),
         RUNTIME_SCHEDULER_STARTUP_DELAY_SECONDS: String(

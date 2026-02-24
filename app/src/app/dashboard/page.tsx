@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import type { Address } from '@solana/kit';
 import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
@@ -9,7 +9,7 @@ import {
   getAgentWalletPda,
   fetchAgentState,
   fetchAgentWalletBalance,
-  fetchAgentsByOwner,
+  fetchAgentsByOwners,
 } from '@agents-haus/sdk';
 import type { AgentState } from '@agents-haus/sdk';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
@@ -56,7 +56,26 @@ export default function DashboardPage() {
   const [searched, setSearched] = useState(false);
   const [searchMint, setSearchMint] = useState('');
   const [showActiveMachinesOnly, setShowActiveMachinesOnly] = useState(false);
-  const walletAddress = getPreferredSolanaWallet(wallets, user)?.address as Address | undefined;
+  const preferredWalletAddress = getPreferredSolanaWallet(wallets, user)?.address as
+    | Address
+    | undefined;
+  const walletAddresses = useMemo(() => {
+    const seen = new Set<string>();
+    const ordered: Address[] = [];
+    const addAddress = (value: unknown) => {
+      if (typeof value !== 'string') return;
+      const trimmed = value.trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      ordered.push(trimmed as Address);
+    };
+
+    addAddress(preferredWalletAddress);
+    for (const wallet of wallets || []) {
+      addAddress(wallet?.address);
+    }
+    return ordered;
+  }, [preferredWalletAddress, wallets]);
 
   const fetchMachineStatesBulk = useCallback(
     async (soulMints: string[]): Promise<Record<string, AgentMachineState>> => {
@@ -128,19 +147,19 @@ export default function DashboardPage() {
 
   // Auto-load agents for the connected wallet
   useEffect(() => {
-    if (!authenticated || !walletAddress) {
+    if (!authenticated || walletAddresses.length === 0) {
       setAgents((prev) => (prev.length > 0 ? [] : prev));
       setLoading(false);
       return;
     }
-    const ownerAddress = walletAddress as Address;
+    const ownerAddresses = walletAddresses;
 
     let cancelled = false;
 
     async function loadWalletAgents() {
       setLoading(true);
       try {
-        const results = await fetchAgentsByOwner(rpc, ownerAddress);
+        const results = await fetchAgentsByOwners(rpc, ownerAddresses);
         if (cancelled) return;
 
         const soulMints = results.map(({ state }) => state.soulMint as string);
@@ -190,7 +209,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [authenticated, walletAddress, rpc, hydrateCachedNames, fetchMachineStatesBulk]);
+  }, [authenticated, walletAddresses, rpc, hydrateCachedNames, fetchMachineStatesBulk]);
 
   const handleSearch = useCallback(async () => {
     if (!searchMint.trim()) return;
@@ -371,6 +390,8 @@ export default function DashboardPage() {
                 name={agentNames[agent.soulMint] || `Agent ${agent.soulMint.slice(0, 6)}`}
                 strategy={agent.state.strategy as any}
                 isActive={agent.state.isActive}
+                machineDeployed={agent.machine.deployed}
+                machineState={agent.machine.state}
                 totalTips={agent.state.totalTips}
                 totalBurns={agent.state.totalBurns}
                 balance={agent.balance}

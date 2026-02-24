@@ -37,6 +37,7 @@ import {
   BURN_FLIP_TOKENS,
 } from '../../../../src/env';
 import { buildAndSendTransaction } from '../../../../src/tx';
+import { getAutoReclaimMemoFromSoul } from '../../../../src/soul';
 
 const Strategy = {
   AlphaHunter: 0,
@@ -133,6 +134,7 @@ export async function autoReclaim() {
       if (shouldReclaimAlpha) {
         const flipAmount = status.topAlphaAmount + TIP_FLIP_LAMPORTS;
         if (walletBalance >= flipAmount) {
+          const reclaimMemo = await getAutoReclaimMemoFromSoul();
           const [epochStatus] = await getEpochStatusPda(epoch);
           const [alpha] = await getAlphaPda(epoch);
           const [otherAlphas] = await getOtherAlphasPda(epoch);
@@ -154,7 +156,7 @@ export async function autoReclaim() {
               epoch,
               uuid: crypto.randomUUID(),
               amount: flipAmount,
-              memo: '[auto-reclaim] Reclaiming TOP ALPHA position',
+              memo: reclaimMemo,
               taggedAddresses: [],
             },
           );

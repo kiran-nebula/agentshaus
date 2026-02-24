@@ -159,6 +159,20 @@ export async function fetchAgentsByOwner(
   rpc: Rpc<SolanaRpcApi>,
   ownerAddress: Address,
 ): Promise<{ address: Address; state: AgentState }[]> {
+  return fetchAgentsByOwners(rpc, [ownerAddress]);
+}
+
+/**
+ * Fetch all AgentState accounts whose Soul NFT is currently held by any address in `ownerAddresses`.
+ * This resolves live owner from each mpl-core asset account to stay correct after NFT transfers.
+ */
+export async function fetchAgentsByOwners(
+  rpc: Rpc<SolanaRpcApi>,
+  ownerAddresses: readonly Address[],
+): Promise<{ address: Address; state: AgentState }[]> {
+  if (ownerAddresses.length === 0) return [];
+  const ownerSet = new Set(ownerAddresses.map((owner) => String(owner)));
+
   const discB64 = btoa(String.fromCharCode(...AGENT_STATE_DISCRIMINATOR));
 
   const accounts = (await rpc
@@ -189,7 +203,7 @@ export async function fetchAgentsByOwner(
       batch.map(async (entry) => {
         try {
           const currentOwner = await fetchCurrentSoulOwner(rpc, entry.state.soulMint);
-          if (String(currentOwner) === String(ownerAddress)) return entry;
+          if (currentOwner && ownerSet.has(String(currentOwner))) return entry;
         } catch {
           // Skip this entry if owner lookup fails
         }

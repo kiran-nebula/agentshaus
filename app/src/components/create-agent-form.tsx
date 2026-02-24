@@ -276,6 +276,7 @@ export function CreateAgentForm() {
       };
       localStorage.setItem(`agent-deploy-preset:${soulAssetAddress}`, JSON.stringify(deployPreset));
       localStorage.setItem(`agent-name:${soulAssetAddress}`, name.trim());
+      localStorage.setItem(`agent-soul-text:${soulAssetAddress}`, bio.trim());
       setSubmitPhase('deploying');
 
       try {
@@ -283,12 +284,13 @@ export function CreateAgentForm() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            force: true,
-            profileId: selectedFlavor,
-            skills: selectedSkills,
-            model: selectedProfile.defaultModel || null,
-          }),
-        });
+              force: true,
+              profileId: selectedFlavor,
+              skills: selectedSkills,
+              model: selectedProfile.defaultModel || null,
+              soulText: bio.trim(),
+            }),
+          });
 
         if (deployRes.ok) {
           const deployData = await deployRes.json().catch(() => null);

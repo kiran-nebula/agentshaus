@@ -179,12 +179,42 @@ function extractUserId(user: unknown): string | null {
 export async function isWalletLinkedToPrivyUser(
   userId: string,
   walletAddress: string,
+  options?: {
+    idToken?: string | null;
+  },
 ): Promise<boolean> {
   const requestedWallet = walletAddress.trim();
   if (!requestedWallet) return false;
 
   const cacheKey = getOwnershipCacheKey(userId, requestedWallet);
   if (isOwnershipCacheHit(cacheKey)) return true;
+
+  const idToken = options?.idToken?.trim() || '';
+  let tokenLinkedWallets: Set<string> | null = null;
+
+  if (idToken) {
+    try {
+      // Prefer claims from the session token to avoid rate-limited user lookups.
+      const tokenUser = await getPrivyClient().getUser({ idToken });
+      const tokenUserId = extractUserId(tokenUser);
+      if (tokenUserId && tokenUserId !== userId) {
+        return false;
+      }
+
+      tokenLinkedWallets = extractWalletAddresses(tokenUser);
+      if (tokenLinkedWallets.size > 0) {
+        setCachedUserWallets(userId, tokenLinkedWallets);
+      }
+
+      if (tokenLinkedWallets.has(requestedWallet)) {
+        setOwnershipCache(cacheKey);
+        setCachedWalletOwner(requestedWallet, userId);
+        return true;
+      }
+    } catch {
+      // Fall back to API lookups below.
+    }
+  }
 
   const cachedWalletOwner = getCachedWalletOwner(requestedWallet);
   if (cachedWalletOwner !== undefined) {
@@ -219,13 +249,17 @@ export async function isWalletLinkedToPrivyUser(
     return matches;
   }
 
+  if (tokenLinkedWallets && tokenLinkedWallets.size > 0) {
+    return false;
+  }
+
   let user: unknown;
   try {
     user = await getPrivyClient().getUser(userId);
   } catch (err) {
     const status = getErrorStatus(err);
-    if (status === 404) return false;
-    throw err;
+    if (status === 404 || status === 429) return false;
+    return false;
   }
 
   const linkedWallets = extractWalletAddresses(user);

@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import type { Address } from '@solana/kit';
-import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
-import { fetchAgentsByOwner } from '@agents-haus/sdk';
+import { useIdentityToken, usePrivy, useSolanaWallets } from '@privy-io/react-auth';
+import { fetchAgentsByOwners } from '@agents-haus/sdk';
 import { STRATEGY_LABELS, truncateAddress, type Strategy } from '@agents-haus/common';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
 import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
@@ -193,6 +193,7 @@ function ToolbarIconButton({
 
 export default function FilesPage() {
   const { authenticated, login, getAccessToken, user } = usePrivy();
+  const { identityToken } = useIdentityToken();
   const { wallets } = useSolanaWallets();
   const { rpc } = useSolanaRpc();
 
@@ -216,7 +217,26 @@ export default function FilesPage() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
 
-  const walletAddress = getPreferredSolanaWallet(wallets, user)?.address as Address | undefined;
+  const preferredWalletAddress = getPreferredSolanaWallet(wallets, user)?.address as
+    | Address
+    | undefined;
+  const walletAddresses = useMemo(() => {
+    const seen = new Set<string>();
+    const ordered: Address[] = [];
+    const addAddress = (value: unknown) => {
+      if (typeof value !== 'string') return;
+      const trimmed = value.trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      ordered.push(trimmed as Address);
+    };
+
+    addAddress(preferredWalletAddress);
+    for (const wallet of wallets || []) {
+      addAddress(wallet?.address);
+    }
+    return ordered;
+  }, [preferredWalletAddress, wallets]);
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.soulMint === selectedAgentMint) || null,
     [agents, selectedAgentMint],
@@ -227,10 +247,14 @@ export default function FilesPage() {
     if (!accessToken) {
       throw new Error('Wallet session expired. Reconnect and try again.');
     }
-    return {
+    const headers: HeadersInit = {
       Authorization: `Bearer ${accessToken}`,
     };
-  }, [getAccessToken]);
+    if (identityToken) {
+      headers['X-Privy-Identity-Token'] = identityToken;
+    }
+    return headers;
+  }, [getAccessToken, identityToken]);
 
   const fetchMachineStatesBulk = useCallback(
     async (soulMints: string[]): Promise<Record<string, AgentMachineState>> => {
@@ -290,7 +314,7 @@ export default function FilesPage() {
   );
 
   const loadAgents = useCallback(async () => {
-    if (!authenticated || !walletAddress) {
+    if (!authenticated || walletAddresses.length === 0) {
       setAgents([]);
       setSelectedAgentMint(null);
       return;
@@ -299,8 +323,7 @@ export default function FilesPage() {
     setLoadingAgents(true);
     setAgentError(null);
     try {
-      const owner = walletAddress as Address;
-      const results = await fetchAgentsByOwner(rpc, owner);
+      const results = await fetchAgentsByOwners(rpc, walletAddresses);
       const soulMints = results.map(({ state }) => state.soulMint as string);
       const machineStates = await fetchMachineStatesBulk(soulMints);
       const entries = results.map(({ state }) => {
@@ -330,7 +353,7 @@ export default function FilesPage() {
     } finally {
       setLoadingAgents(false);
     }
-  }, [authenticated, walletAddress, rpc, fetchMachineStatesBulk]);
+  }, [authenticated, walletAddresses, rpc, fetchMachineStatesBulk]);
 
   const loadTree = useCallback(async () => {
     if (!selectedAgentMint) {

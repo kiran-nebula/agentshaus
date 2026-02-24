@@ -1096,11 +1096,16 @@ export function AgentDetailClient({ soulMint }: Props) {
   const handleDeploy = async () => {
     setChatError(null);
     try {
+      const storedSoulText =
+        typeof window !== 'undefined'
+          ? localStorage.getItem(`agent-soul-text:${soulMint}`)?.trim() || ''
+          : '';
       const deployPayload = {
         force: true,
         profileId: deployPreset.profileId,
         skills: deployPreset.skills,
         model: deployPreset.model,
+        ...(storedSoulText ? { soulText: storedSoulText } : {}),
       };
 
       const deployRes = await fetch(`/api/agent/${soulMint}/deploy`, {

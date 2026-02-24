@@ -13,6 +13,7 @@ import { STRATEGY_LABELS, type Strategy } from '@agents-haus/common';
 import { getRpc, getSoulMint, getAgentStatePda, getExecutorAddress } from './env';
 import { startGateway } from './gateway';
 import { loadRuntimeSchedulerConfig, RuntimeScheduler } from './scheduler';
+import { hydrateSoulTemplateFromEnv } from './soul';
 
 const REQUIRED_ENV_VARS = [
   'SOLANA_RPC_URL',
@@ -40,6 +41,8 @@ async function main() {
 
   // Validate environment
   validateEnv();
+
+  await hydrateSoulTemplateFromEnv();
 
   const rpc = getRpc();
   const soulMint = getSoulMint();
