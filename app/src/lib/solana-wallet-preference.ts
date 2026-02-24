@@ -2,6 +2,12 @@ interface SolanaWalletLike {
   address: string;
   walletClientType?: string | null;
   connectorType?: string | null;
+  isPrivyWallet?: boolean | null;
+  standardWallet?: {
+    name?: string | null;
+    isPrivyWallet?: boolean | null;
+    features?: Record<string, unknown> | null;
+  } | null;
 }
 
 interface PrivyLinkedAccountLike {
@@ -15,6 +21,27 @@ interface PrivyUserLike {
 
 const PRIVY_WALLET_CLIENT_TYPES = new Set(['privy', 'privy-v2']);
 
+function isPrivyStandardWallet(wallet: SolanaWalletLike): boolean {
+  if (wallet.isPrivyWallet === true) return true;
+
+  const standardWallet = wallet.standardWallet;
+  if (!standardWallet) return false;
+
+  if (standardWallet.isPrivyWallet === true) return true;
+
+  const standardWalletName =
+    typeof standardWallet.name === 'string'
+      ? standardWallet.name.toLowerCase()
+      : null;
+  if (standardWalletName === 'privy') return true;
+
+  return Boolean(
+    standardWallet.features &&
+      typeof standardWallet.features === 'object' &&
+      'privy:' in standardWallet.features,
+  );
+}
+
 function isPrivyEmbeddedWallet(wallet: SolanaWalletLike): boolean {
   const walletClientType = wallet.walletClientType?.toLowerCase();
   if (walletClientType && PRIVY_WALLET_CLIENT_TYPES.has(walletClientType)) {
@@ -22,7 +49,11 @@ function isPrivyEmbeddedWallet(wallet: SolanaWalletLike): boolean {
   }
 
   const connectorType = wallet.connectorType?.toLowerCase();
-  return connectorType === 'embedded' || connectorType === 'embedded_imported';
+  if (connectorType === 'embedded' || connectorType === 'embedded_imported') {
+    return true;
+  }
+
+  return isPrivyStandardWallet(wallet);
 }
 
 export function getEmbeddedSolanaWallet<T extends SolanaWalletLike>(

@@ -2,7 +2,8 @@
 
 import { useCallback } from 'react';
 import type { Address } from '@solana/kit';
-import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
+import { usePrivy } from '@privy-io/react-auth';
+import { useConnectedStandardWallets } from '@privy-io/react-auth/solana';
 import {
   getAgentStatePda,
   getAgentWalletPda,
@@ -16,16 +17,21 @@ import {
   PROGRAM_ID,
   MPL_CORE_PROGRAM_ID,
 } from '@agents-haus/common';
-import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
+import {
+  getExternalSolanaWallet,
+  getPreferredSolanaWallet,
+} from '@/lib/solana-wallet-preference';
 
 const SYSTEM_PROGRAM = '11111111111111111111111111111111' as Address;
 
 export function useAgentTransactions() {
   const { user } = usePrivy();
-  const { wallets } = useSolanaWallets();
+  const { wallets } = useConnectedStandardWallets();
 
   const getWalletAddress = useCallback((): Address => {
-    const solanaWallet = getPreferredSolanaWallet(wallets, user);
+    const solanaWallet =
+      getExternalSolanaWallet(wallets) ??
+      getPreferredSolanaWallet(wallets, user);
     if (!solanaWallet) throw new Error('No Solana wallet connected');
     return solanaWallet.address as Address;
   }, [wallets, user]);
