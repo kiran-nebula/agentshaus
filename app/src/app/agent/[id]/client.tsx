@@ -35,6 +35,7 @@ interface MachineInfo {
   profileId?: string | null;
   skills?: string[];
   model?: string | null;
+  postingTopics?: string[];
   scheduler?: {
     enabled?: boolean | null;
     intervalMinutes?: number | null;
@@ -85,6 +86,33 @@ function getModelName(modelId?: string): string | null {
   if (!normalized) return null;
   const found = DEFAULT_LLM_MODELS.find((entry) => entry.id === normalized);
   return found ? found.name : normalized;
+}
+
+function parsePostingTopics(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value !== 'string') return [];
+
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+
+  if (trimmed.startsWith('[')) {
+    try {
+      return parsePostingTopics(JSON.parse(trimmed));
+    } catch {
+      // Fall through to delimiter parsing.
+    }
+  }
+
+  return trimmed
+    .split(/[|,]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 interface DeployPreset {
@@ -851,7 +879,7 @@ export function AgentDetailClient({ soulMint }: Props) {
   const [showPanel, setShowPanel] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [deployPreset, setDeployPreset] = useState<DeployPreset>({
-    profileId: 'alpha-hunter',
+    profileId: 'balanced',
     skills: [],
     model: null,
   });
@@ -935,7 +963,7 @@ export function AgentDetailClient({ soulMint }: Props) {
       try {
         const parsed = JSON.parse(fromStorageRaw);
         fromStorage = {
-          profileId: typeof parsed.profileId === 'string' ? parsed.profileId : 'alpha-hunter',
+          profileId: typeof parsed.profileId === 'string' ? parsed.profileId : 'balanced',
           skills: Array.isArray(parsed.skills)
             ? parsed.skills.filter((v: unknown) => typeof v === 'string')
             : [],
@@ -960,7 +988,7 @@ export function AgentDetailClient({ soulMint }: Props) {
         : null;
 
     const merged: DeployPreset = {
-      profileId: queryProfile || fromStorage?.profileId || machineProfile || 'alpha-hunter',
+      profileId: queryProfile || fromStorage?.profileId || machineProfile || 'balanced',
       skills:
         querySkillsList.length > 0
           ? querySkillsList
@@ -1100,12 +1128,25 @@ export function AgentDetailClient({ soulMint }: Props) {
         typeof window !== 'undefined'
           ? localStorage.getItem(`agent-soul-text:${soulMint}`)?.trim() || ''
           : '';
+      const storedPostingTopicsRaw =
+        typeof window !== 'undefined'
+          ? localStorage.getItem(`agent-posting-topics:${soulMint}`)
+          : null;
+      const storedPostingTopics = parsePostingTopics(storedPostingTopicsRaw);
+      const fallbackPostingTopics = parsePostingTopics(machineInfo?.postingTopics);
+      const runtimePostingTopics =
+        storedPostingTopics.length > 0
+          ? storedPostingTopics
+          : fallbackPostingTopics;
       const deployPayload = {
         force: true,
         profileId: deployPreset.profileId,
         skills: deployPreset.skills,
         model: deployPreset.model,
         ...(storedSoulText ? { soulText: storedSoulText } : {}),
+        ...(runtimePostingTopics.length > 0
+          ? { postingTopics: runtimePostingTopics }
+          : {}),
       };
 
       const deployRes = await fetch(`/api/agent/${soulMint}/deploy`, {

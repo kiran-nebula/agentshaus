@@ -4,9 +4,12 @@ import { MAX_MEMO_LENGTH } from '@agents-haus/common';
 
 const SOUL_FILE_PATH = path.join(process.cwd(), 'workspace', 'SOUL.md');
 const PERSONALITY_PLACEHOLDER = '{PERSONALITY_PLACEHOLDER}';
+const POSTING_TOPICS_PLACEHOLDER = '{POSTING_TOPICS_PLACEHOLDER}';
 const AUTO_RECLAIM_MEMO_FALLBACK = '[auto-reclaim] Reclaiming TOP ALPHA position';
 const MAX_SOUL_TEXT_LENGTH = 4_000;
 const MAX_STYLE_SNIPPET_LENGTH = 220;
+const MAX_POSTING_TOPICS = 12;
+const MAX_POSTING_TOPIC_LENGTH = 80;
 const MEMO_CACHE_TTL_MS = 60_000;
 
 let memoCache: { value: string; expiresAt: number } | null = null;
@@ -22,6 +25,34 @@ function normalizeWhitespace(input: string): string {
 function sanitizeSoulText(input: string | null | undefined): string {
   if (!input) return '';
   return normalizeWhitespace(input).slice(0, MAX_SOUL_TEXT_LENGTH);
+}
+
+function normalizePostingTopic(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = normalizeWhitespace(value).slice(0, MAX_POSTING_TOPIC_LENGTH);
+  return normalized || null;
+}
+
+function normalizePostingTopics(value: unknown): string[] {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[|,]/)
+      : [];
+
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of values) {
+    const normalized = normalizePostingTopic(entry);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(normalized);
+    if (deduped.length >= MAX_POSTING_TOPICS) break;
+  }
+
+  return deduped;
 }
 
 function trimMemo(input: string): string {
@@ -84,6 +115,28 @@ function getSoulTextFromEnv(): string {
   return sanitizeSoulText(process.env.AGENT_SOUL_TEXT);
 }
 
+function getPostingTopicsFromEnv(): string[] {
+  const raw = (process.env.AGENT_POSTING_TOPICS_JSON || process.env.AGENT_POSTING_TOPICS || '').trim();
+  if (!raw) return [];
+
+  if (raw.startsWith('[')) {
+    try {
+      return normalizePostingTopics(JSON.parse(raw));
+    } catch {
+      return normalizePostingTopics(raw);
+    }
+  }
+
+  return normalizePostingTopics(raw);
+}
+
+function buildPostingTopicsLine(topics: string[]): string {
+  if (topics.length === 0) {
+    return 'Primary posting topics: follow explicit user requests.';
+  }
+  return `Primary posting topics: ${topics.join(', ')}`;
+}
+
 async function readSoulDocument(): Promise<string> {
   try {
     return await readFile(SOUL_FILE_PATH, 'utf8');
@@ -94,13 +147,27 @@ async function readSoulDocument(): Promise<string> {
 
 export async function hydrateSoulTemplateFromEnv(): Promise<void> {
   const soulText = getSoulTextFromEnv();
-  if (!soulText) return;
+  const postingTopics = getPostingTopicsFromEnv();
 
   const soulDocument = await readSoulDocument();
   if (!soulDocument) return;
-  if (!soulDocument.includes(PERSONALITY_PLACEHOLDER)) return;
+  if (
+    !soulDocument.includes(PERSONALITY_PLACEHOLDER) &&
+    !soulDocument.includes(POSTING_TOPICS_PLACEHOLDER)
+  ) {
+    return;
+  }
 
-  const hydrated = soulDocument.replace(PERSONALITY_PLACEHOLDER, soulText);
+  let hydrated = soulDocument;
+  if (soulText && hydrated.includes(PERSONALITY_PLACEHOLDER)) {
+    hydrated = hydrated.replace(PERSONALITY_PLACEHOLDER, soulText);
+  }
+  if (hydrated.includes(POSTING_TOPICS_PLACEHOLDER)) {
+    hydrated = hydrated.replace(
+      POSTING_TOPICS_PLACEHOLDER,
+      buildPostingTopicsLine(postingTopics),
+    );
+  }
   if (hydrated === soulDocument) return;
 
   try {

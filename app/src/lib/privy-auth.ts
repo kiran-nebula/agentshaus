@@ -66,6 +66,21 @@ export async function verifyPrivyAccessToken(token: string): Promise<string> {
   return claims.userId;
 }
 
+export async function verifyPrivyIdentityToken(idToken: string): Promise<{
+  userId: string;
+  walletAddresses: Set<string>;
+}> {
+  const user = await getPrivyClient().getUser({ idToken });
+  const userId = extractUserId(user);
+  if (!userId) {
+    throw new Error('Identity token user is missing an id');
+  }
+  return {
+    userId,
+    walletAddresses: extractWalletAddresses(user),
+  };
+}
+
 function getOwnershipCacheKey(userId: string, walletAddress: string): string {
   return `${userId}:${walletAddress}`;
 }
@@ -197,18 +212,20 @@ export async function isWalletLinkedToPrivyUser(
       // Prefer claims from the session token to avoid rate-limited user lookups.
       const tokenUser = await getPrivyClient().getUser({ idToken });
       const tokenUserId = extractUserId(tokenUser);
-      if (tokenUserId && tokenUserId !== userId) {
-        return false;
-      }
+      const tokenUserMatches = !tokenUserId || tokenUserId === userId;
 
       tokenLinkedWallets = extractWalletAddresses(tokenUser);
       if (tokenLinkedWallets.size > 0) {
-        setCachedUserWallets(userId, tokenLinkedWallets);
+        if (tokenUserMatches) {
+          setCachedUserWallets(userId, tokenLinkedWallets);
+        }
       }
 
       if (tokenLinkedWallets.has(requestedWallet)) {
-        setOwnershipCache(cacheKey);
-        setCachedWalletOwner(requestedWallet, userId);
+        if (tokenUserMatches) {
+          setOwnershipCache(cacheKey);
+          setCachedWalletOwner(requestedWallet, userId);
+        }
         return true;
       }
     } catch {

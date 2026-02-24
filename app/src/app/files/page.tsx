@@ -7,7 +7,6 @@ import { useIdentityToken, usePrivy, useSolanaWallets } from '@privy-io/react-au
 import { fetchAgentsByOwners } from '@agents-haus/sdk';
 import { STRATEGY_LABELS, truncateAddress, type Strategy } from '@agents-haus/common';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
-import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
 
 type FileRootKey = 'user' | 'workspace' | 'runtime' | 'tmp';
 
@@ -54,10 +53,89 @@ const DEFAULT_ROOTS: RootDescriptor[] = [
   { key: 'tmp', label: 'Tmp', rootPath: '/tmp' },
 ];
 
+function formatFilesApiError(payload: unknown, fallback: string): string {
+  const message =
+    payload && typeof payload === 'object' && typeof (payload as { error?: unknown }).error === 'string'
+      ? (payload as { error: string }).error
+      : fallback;
+
+  const currentOwner =
+    payload &&
+    typeof payload === 'object' &&
+    typeof (payload as { currentOwner?: unknown }).currentOwner === 'string'
+      ? (payload as { currentOwner: string }).currentOwner
+      : null;
+
+  if (
+    currentOwner &&
+    message === 'Only the current Soul NFT owner can access agent files'
+  ) {
+    const authHint =
+      payload &&
+      typeof payload === 'object' &&
+      typeof (payload as { authHint?: unknown }).authHint === 'string'
+        ? (payload as { authHint: string }).authHint
+        : null;
+    return authHint
+      ? `${message} (current owner: ${currentOwner}; ${authHint})`
+      : `${message} (current owner: ${currentOwner})`;
+  }
+
+  return message;
+}
+
 function parseAssetName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function isLikelySolanaAddress(value: string): boolean {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value);
+}
+
+function getLinkedSolanaWalletAddresses(user: unknown): Address[] {
+  const seen = new Set<string>();
+  const ordered: Address[] = [];
+  const addAddress = (value: unknown) => {
+    if (typeof value !== 'string') return;
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed) || !isLikelySolanaAddress(trimmed)) return;
+    seen.add(trimmed);
+    ordered.push(trimmed as Address);
+  };
+
+  if (!user || typeof user !== 'object') return ordered;
+
+  const candidate = user as {
+    wallet?: { address?: unknown; chainType?: unknown } | null;
+    linkedAccounts?: unknown;
+  };
+
+  const primaryChainType =
+    typeof candidate.wallet?.chainType === 'string'
+      ? candidate.wallet.chainType.toLowerCase()
+      : '';
+  if (!primaryChainType || primaryChainType === 'solana') {
+    addAddress(candidate.wallet?.address);
+  }
+
+  if (!Array.isArray(candidate.linkedAccounts)) return ordered;
+  for (const linked of candidate.linkedAccounts) {
+    if (!linked || typeof linked !== 'object') continue;
+    const account = linked as {
+      type?: unknown;
+      address?: unknown;
+      chainType?: unknown;
+    };
+    if (account.type !== 'wallet') continue;
+    const chainType =
+      typeof account.chainType === 'string' ? account.chainType.toLowerCase() : '';
+    if (chainType && chainType !== 'solana') continue;
+    addAddress(account.address);
+  }
+
+  return ordered;
 }
 
 function formatBytes(bytes: number): string {
@@ -217,10 +295,8 @@ export default function FilesPage() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
 
-  const preferredWalletAddress = getPreferredSolanaWallet(wallets, user)?.address as
-    | Address
-    | undefined;
-  const walletAddresses = useMemo(() => {
+  const linkedWalletAddresses = useMemo(() => getLinkedSolanaWalletAddresses(user), [user]);
+  const connectedWalletAddresses = useMemo(() => {
     const seen = new Set<string>();
     const ordered: Address[] = [];
     const addAddress = (value: unknown) => {
@@ -230,13 +306,12 @@ export default function FilesPage() {
       seen.add(trimmed);
       ordered.push(trimmed as Address);
     };
-
-    addAddress(preferredWalletAddress);
     for (const wallet of wallets || []) {
       addAddress(wallet?.address);
     }
     return ordered;
-  }, [preferredWalletAddress, wallets]);
+  }, [wallets]);
+  const walletAddresses = linkedWalletAddresses;
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.soulMint === selectedAgentMint) || null,
     [agents, selectedAgentMint],
@@ -314,9 +389,22 @@ export default function FilesPage() {
   );
 
   const loadAgents = useCallback(async () => {
-    if (!authenticated || walletAddresses.length === 0) {
+    if (!authenticated) {
       setAgents([]);
       setSelectedAgentMint(null);
+      setAgentError(null);
+      return;
+    }
+
+    if (walletAddresses.length === 0) {
+      const connectedHint = connectedWalletAddresses[0]
+        ? ` Connected wallet: ${connectedWalletAddresses[0]}.`
+        : '';
+      setAgents([]);
+      setSelectedAgentMint(null);
+      setAgentError(
+        `No Solana wallet is linked to this Privy account.${connectedHint} Link your owner wallet in Privy and retry.`,
+      );
       return;
     }
 
@@ -353,7 +441,13 @@ export default function FilesPage() {
     } finally {
       setLoadingAgents(false);
     }
-  }, [authenticated, walletAddresses, rpc, fetchMachineStatesBulk]);
+  }, [
+    authenticated,
+    walletAddresses,
+    connectedWalletAddresses,
+    rpc,
+    fetchMachineStatesBulk,
+  ]);
 
   const loadTree = useCallback(async () => {
     if (!selectedAgentMint) {
@@ -392,7 +486,7 @@ export default function FilesPage() {
       }).finally(() => window.clearTimeout(timeout));
       const payload = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(payload?.error || 'Failed to load files');
+        throw new Error(formatFilesApiError(payload, 'Failed to load files'));
       }
 
       if (Array.isArray(payload?.roots)) {
@@ -480,7 +574,7 @@ export default function FilesPage() {
       }).finally(() => window.clearTimeout(timeout));
       const payload = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(payload?.error || 'Upload failed');
+        throw new Error(formatFilesApiError(payload, 'Upload failed'));
       }
 
       const uploadedPath =

@@ -55,7 +55,7 @@ export function SkillsCatalog() {
             Add skill packs to your agents
           </h1>
           <p className="mt-4 max-w-3xl text-sm text-ink-secondary sm:text-base">
-            Pulled from `sendaifun/skills`. Select skills here, then apply them to a new agent profile in one click.
+            Pulled from `sendaifun/skills`. Select skills here, then apply them to a new agent in one click.
           </p>
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <a

@@ -8,6 +8,7 @@ import {
   isWalletLinkedToPrivyUser,
   PrivyConfigurationError,
   verifyPrivyAccessToken,
+  verifyPrivyIdentityToken,
 } from '@/lib/privy-auth';
 
 const RUNTIME_PROXY_TIMEOUT_MS = Number.parseInt(
@@ -120,18 +121,41 @@ async function enforceWalletOwnership(
   const identityToken =
     request.headers.get('x-privy-identity-token') ||
     request.headers.get('x-privy-id-token');
+  const ownerAddress = String(currentOwner);
+
+  let identityTokenProvided = false;
+  if (typeof identityToken === 'string' && identityToken.trim()) {
+    identityTokenProvided = true;
+    try {
+      const identity = await verifyPrivyIdentityToken(identityToken.trim());
+      // If the identity token itself contains the Soul owner wallet, grant access
+      // immediately. This avoids false negatives from stale access-token sessions.
+      if (identity.walletAddresses.has(ownerAddress)) {
+        return null;
+      }
+      userId = identity.userId;
+    } catch (err) {
+      if (err instanceof PrivyConfigurationError) {
+        return NextResponse.json({ error: err.message }, { status: 500 });
+      }
+      // Continue with access-token-based verification fallback.
+    }
+  }
 
   try {
     const isOwner = await isWalletLinkedToPrivyUser(
       userId,
-      String(currentOwner),
+      ownerAddress,
       { idToken: identityToken },
     );
     if (!isOwner) {
       return NextResponse.json(
         {
           error: 'Only the current Soul NFT owner can access agent files',
-          currentOwner: String(currentOwner),
+          currentOwner: ownerAddress,
+          authHint: identityTokenProvided
+            ? 'identity-token-present-but-owner-wallet-not-linked'
+            : 'identity-token-missing',
         },
         { status: 403 },
       );

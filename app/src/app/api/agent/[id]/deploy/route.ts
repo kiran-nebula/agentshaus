@@ -13,6 +13,8 @@ const ALPHA_RUNTIME_PROFILES = new Set([
   'vibes-poster',
 ]);
 const MAX_RUNTIME_SOUL_TEXT_LENGTH = 4_000;
+const MAX_POSTING_TOPICS = 12;
+const MAX_POSTING_TOPIC_LENGTH = 80;
 
 function getRpc(): Rpc<SolanaRpcApi> {
   if (!rpc) {
@@ -93,6 +95,56 @@ function normalizeRuntimeSoulText(value: unknown): string {
     .slice(0, MAX_RUNTIME_SOUL_TEXT_LENGTH);
 }
 
+function normalizePostingTopic(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value
+    .replace(/\r/g, '')
+    .replace(/\u0000/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_POSTING_TOPIC_LENGTH);
+  return normalized || null;
+}
+
+function normalizePostingTopics(value: unknown): string[] {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : [];
+
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of values) {
+    const normalized = normalizePostingTopic(entry);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(normalized);
+    if (deduped.length >= MAX_POSTING_TOPICS) break;
+  }
+
+  return deduped;
+}
+
+function parsePostingTopicsFromEnv(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+
+  if (trimmed.startsWith('[')) {
+    try {
+      return normalizePostingTopics(JSON.parse(trimmed));
+    } catch {
+      // Fall back to delimiter parsing.
+    }
+  }
+
+  return normalizePostingTopics(trimmed.split(/[|,]/));
+}
+
 async function deriveExecutorAddress(executorKeypair: string): Promise<string> {
   const raw = executorKeypair.trim();
   const bytes = raw.startsWith('[')
@@ -170,7 +222,7 @@ export async function POST(
 
     // 2. Parse request body
     const body = await request.json();
-    const { force, profileId, skills, model, scheduler, soulText } = body;
+    const { force, profileId, skills, model, scheduler, soulText, postingTopics } = body;
     const sharedExecutorKeypair = getSharedExecutorKeypair();
     let runtimeExecutor: string;
     try {
@@ -236,6 +288,7 @@ export async function POST(
         ? 'alpha-maintenance'
         : 'alpha-maintenance';
     const requestedSoulText = normalizeRuntimeSoulText(soulText);
+    const requestedPostingTopics = normalizePostingTopics(postingTopics);
 
     // 3. Check if machine already exists
     const fly = getFlyClient();
@@ -244,6 +297,14 @@ export async function POST(
       existing?.config?.env?.AGENT_SOUL_TEXT,
     );
     const runtimeSoulText = requestedSoulText || existingSoulText;
+    const existingPostingTopics = parsePostingTopicsFromEnv(
+      existing?.config?.env?.AGENT_POSTING_TOPICS_JSON ||
+        existing?.config?.env?.AGENT_POSTING_TOPICS,
+    );
+    const runtimePostingTopics =
+      requestedPostingTopics.length > 0
+        ? requestedPostingTopics
+        : existingPostingTopics;
     if (existing) {
       if (!force) {
         return NextResponse.json(
@@ -298,6 +359,10 @@ export async function POST(
         AGENT_SKILLS: normalizedSkills.join(','),
         AGENT_MODEL: normalizedModel,
         AGENT_SOUL_TEXT: runtimeSoulText,
+        AGENT_POSTING_TOPICS_JSON:
+          runtimePostingTopics.length > 0
+            ? JSON.stringify(runtimePostingTopics)
+            : '',
         RUNTIME_SCHEDULER_ENABLED: schedulerEnabled ? 'true' : 'false',
         RUNTIME_SCHEDULER_INTERVAL_MINUTES: String(schedulerIntervalMinutes),
         RUNTIME_SCHEDULER_STARTUP_DELAY_SECONDS: String(
@@ -336,6 +401,7 @@ export async function POST(
         mode: schedulerMode,
         autoReclaim: schedulerAutoReclaim,
       },
+      postingTopics: runtimePostingTopics,
     });
   } catch (err) {
     console.error('Deploy error:', err);

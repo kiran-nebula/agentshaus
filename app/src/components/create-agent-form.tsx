@@ -5,24 +5,24 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { usePrivy } from '@privy-io/react-auth';
 import { generateKeyPair, getAddressFromPublicKey } from '@solana/kit';
 import {
-  FLAVOR_PROFILES,
   SOLANA_SKILL_PACKS,
   Strategy,
-  STRATEGY_LABELS,
-  type FlavorProfileId,
   getAgentSkillLabel,
-  getFlavorProfile,
 } from '@agents-haus/common';
 import { useAgentTransactions } from '@/hooks/use-agent-transactions';
 import { useSendTransaction } from '@/hooks/use-send-transaction';
 
-type Step = 'identity' | 'mint';
+type Step = 'identity' | 'topics' | 'mint';
 
-const STEPS: Step[] = ['identity', 'mint'];
+const STEPS: Step[] = ['identity', 'topics', 'mint'];
 const STEP_LABELS: Record<Step, string> = {
-  identity: 'Identity + Strategy',
+  identity: 'Identity',
+  topics: 'Topics',
   mint: 'Mint',
 };
+const DEFAULT_PROFILE_ID = 'balanced';
+const DEFAULT_ONCHAIN_STRATEGY = Strategy.Balanced;
+const DEFAULT_RUNTIME_SKILLS = ['alpha-haus'];
 const MAX_SOUL_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME_TYPES = new Set([
   'image/png',
@@ -38,6 +38,20 @@ const KNOWN_QUERY_SKILLS = new Set([
   'x-posting',
   'grok-writer',
 ]);
+const TOPIC_SUGGESTIONS = [
+  'Solana',
+  'Crypto Markets',
+  'AI Agents',
+  'Memecoins',
+  'Onchain Data',
+  'Tech News',
+  'Trading Psychology',
+  'Builder Updates',
+  'Ecosystem Threads',
+  'Product Announcements',
+];
+const MAX_POSTING_TOPICS = 8;
+const MAX_TOPIC_LENGTH = 48;
 
 async function fetchSharedExecutorAddress(): Promise<string> {
   const response = await fetch('/api/runtime/executor', {
@@ -75,6 +89,10 @@ async function uploadSoulImage(file: File): Promise<string> {
   return imageUrl;
 }
 
+function normalizeTopic(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().slice(0, MAX_TOPIC_LENGTH);
+}
+
 export function CreateAgentForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -85,10 +103,10 @@ export function CreateAgentForm() {
   const [step, setStep] = useState<Step>('identity');
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
-  const [selectedFlavor, setSelectedFlavor] = useState<FlavorProfileId>('alpha-hunter');
+  const [postingTopics, setPostingTopics] = useState<string[]>([]);
+  const [customTopicInput, setCustomTopicInput] = useState('');
   const [extraSkills, setExtraSkills] = useState<string[]>([]);
   const [loadedSkillsFromQuery, setLoadedSkillsFromQuery] = useState(false);
-  const [strategy, setStrategy] = useState<Strategy>(Strategy.AlphaHunter);
   const [soulImageFile, setSoulImageFile] = useState<File | null>(null);
   const [soulImagePreviewUrl, setSoulImagePreviewUrl] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -97,18 +115,10 @@ export function CreateAgentForm() {
   const [showTutorialModal, setShowTutorialModal] = useState(false);
 
   const stepIndex = STEPS.indexOf(step);
-  const selectedProfile = getFlavorProfile(selectedFlavor);
   const selectedSkills = Array.from(
-    new Set([...selectedProfile.presetSkills, ...extraSkills]),
+    new Set([...DEFAULT_RUNTIME_SKILLS, ...extraSkills]),
   );
-  const alphaProfiles = FLAVOR_PROFILES.filter((profile) => profile.category === 'alpha');
-  const generalProfiles = FLAVOR_PROFILES.filter((profile) => profile.category === 'general');
-
-  const handleSelectFlavor = (profileId: FlavorProfileId) => {
-    const profile = getFlavorProfile(profileId);
-    setSelectedFlavor(profileId);
-    setStrategy(profile.baseStrategy);
-  };
+  const canAddMoreTopics = postingTopics.length < MAX_POSTING_TOPICS;
 
   useEffect(() => {
     if (loadedSkillsFromQuery) return;
@@ -196,6 +206,10 @@ export function CreateAgentForm() {
       setError('Agent bio is required');
       return;
     }
+    if (step === 'topics' && postingTopics.length === 0) {
+      setError('Select at least one posting topic');
+      return;
+    }
     setError(null);
     if (stepIndex < STEPS.length - 1) {
       setStep(STEPS[stepIndex + 1]);
@@ -207,6 +221,51 @@ export function CreateAgentForm() {
     if (stepIndex > 0) {
       setStep(STEPS[stepIndex - 1]);
     }
+  };
+
+  const toggleTopic = (topicValue: string) => {
+    const topic = normalizeTopic(topicValue);
+    if (!topic) return;
+
+    setPostingTopics((current) => {
+      const topicKey = topic.toLowerCase();
+      const existingIndex = current.findIndex(
+        (entry) => entry.toLowerCase() === topicKey,
+      );
+      if (existingIndex >= 0) {
+        return current.filter((_, index) => index !== existingIndex);
+      }
+      if (current.length >= MAX_POSTING_TOPICS) {
+        return current;
+      }
+      return [...current, topic];
+    });
+    setError(null);
+  };
+
+  const handleAddCustomTopic = () => {
+    const topic = normalizeTopic(customTopicInput);
+    if (!topic) {
+      setError('Enter a topic name');
+      return;
+    }
+    if (!canAddMoreTopics) {
+      setError(`You can select up to ${MAX_POSTING_TOPICS} topics`);
+      return;
+    }
+
+    const exists = postingTopics.some(
+      (entry) => entry.toLowerCase() === topic.toLowerCase(),
+    );
+    if (exists) {
+      setCustomTopicInput('');
+      setError(null);
+      return;
+    }
+
+    setPostingTopics((current) => [...current, topic]);
+    setCustomTopicInput('');
+    setError(null);
   };
 
   const handleSubmit = async () => {
@@ -236,8 +295,8 @@ export function CreateAgentForm() {
       // 4. Hash identity config for on-chain storage
       const identityConfig = JSON.stringify({
         bio: bio.trim(),
-        flavorId: selectedFlavor,
         selectedSkills,
+        postingTopics,
       });
       const encoder = new TextEncoder();
       const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(identityConfig));
@@ -257,7 +316,7 @@ export function CreateAgentForm() {
         name: name.trim(),
         uri: metadataUri.toString(),
         personalityHash,
-        strategy,
+        strategy: DEFAULT_ONCHAIN_STRATEGY,
         executorPubkey: executorAddress as string,
         soulAssetKeypair: {
           publicKey: soulAssetAddress,
@@ -270,13 +329,17 @@ export function CreateAgentForm() {
       console.log('Agent created on-chain! Signature:', signature);
 
       const deployPreset = {
-        profileId: selectedFlavor,
+        profileId: DEFAULT_PROFILE_ID,
         skills: selectedSkills,
-        model: selectedProfile.defaultModel || null,
+        model: null,
       };
       localStorage.setItem(`agent-deploy-preset:${soulAssetAddress}`, JSON.stringify(deployPreset));
       localStorage.setItem(`agent-name:${soulAssetAddress}`, name.trim());
       localStorage.setItem(`agent-soul-text:${soulAssetAddress}`, bio.trim());
+      localStorage.setItem(
+        `agent-posting-topics:${soulAssetAddress}`,
+        JSON.stringify(postingTopics),
+      );
       setSubmitPhase('deploying');
 
       try {
@@ -285,10 +348,11 @@ export function CreateAgentForm() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
               force: true,
-              profileId: selectedFlavor,
+              profileId: DEFAULT_PROFILE_ID,
               skills: selectedSkills,
-              model: selectedProfile.defaultModel || null,
+              model: null,
               soulText: bio.trim(),
+              postingTopics,
             }),
           });
 
@@ -310,11 +374,7 @@ export function CreateAgentForm() {
       }
 
       const params = new URLSearchParams();
-      params.set('profile', selectedFlavor);
       params.set('skills', selectedSkills.join(','));
-      if (selectedProfile.defaultModel) {
-        params.set('model', selectedProfile.defaultModel);
-      }
 
       setSubmitPhase('done');
       router.push(`/agent/${soulAssetAddress}?${params.toString()}`);
@@ -365,7 +425,7 @@ export function CreateAgentForm() {
         </div>
       )}
 
-      {/* Step: Identity + Strategy */}
+      {/* Step: Identity */}
       {step === 'identity' && (
         <div className="space-y-6">
           <div>
@@ -421,70 +481,112 @@ export function CreateAgentForm() {
             )}
           </div>
           <div>
-            <label className="block text-sm font-medium text-ink mb-2">Alpha App Strategies</label>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {alphaProfiles.map((profile) => (
-                <button
-                  key={profile.id}
-                  onClick={() => handleSelectFlavor(profile.id)}
-                  className={`rounded-2xl border p-5 text-left transition-colors ${
-                    selectedFlavor === profile.id
-                      ? 'border-ink bg-surface-raised shadow-sm'
-                      : 'border-border bg-surface-raised hover:border-ink-muted'
-                  }`}
-                >
-                  <div className="font-semibold text-ink mb-1">{profile.label}</div>
-                  <div className="text-sm text-ink-secondary leading-relaxed">{profile.description}</div>
-                </button>
-              ))}
+            <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
+              <div className="text-xs text-ink-muted mb-1">Runtime defaults</div>
+              <div className="text-sm text-ink-secondary">
+                New agents start with default runtime behavior. Strategy can be directed in chat instead of being baked into this form.
+              </div>
+              <div className="mt-2 text-xs text-ink-muted">
+                Default on-chain strategy: Balanced
+              </div>
             </div>
           </div>
+          {selectedSkills.length > 0 && (
+            <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
+              <div className="text-xs text-ink-muted mb-1">Enabled runtime skills</div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {selectedSkills.map((skillId) => (
+                  <span
+                    key={skillId}
+                    className="rounded-full bg-surface-raised px-2 py-1 text-[11px] text-ink-muted"
+                  >
+                    {getAgentSkillLabel(skillId)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Step: Topics */}
+      {step === 'topics' && (
+        <div className="space-y-6">
           <div>
-            <label className="block text-sm font-medium text-ink mb-2">General Flavours</label>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {generalProfiles.map((profile) => (
+            <label className="mb-2 block text-sm font-medium text-ink">
+              What should your bot post about?
+            </label>
+            <p className="text-sm text-ink-secondary">
+              Pick topic lanes for the default `SOUL.md`. You can change strategy and direction later in chat.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {TOPIC_SUGGESTIONS.map((topic) => {
+              const selected = postingTopics.some(
+                (entry) => entry.toLowerCase() === topic.toLowerCase(),
+              );
+              return (
                 <button
-                  key={profile.id}
-                  onClick={() => handleSelectFlavor(profile.id)}
-                  className={`rounded-2xl border p-5 text-left transition-colors ${
-                    selectedFlavor === profile.id
-                      ? 'border-ink bg-surface-raised shadow-sm'
-                      : 'border-border bg-surface-raised hover:border-ink-muted'
+                  key={topic}
+                  type="button"
+                  onClick={() => toggleTopic(topic)}
+                  className={`rounded-xl border px-3 py-3 text-left text-sm font-medium transition-colors ${
+                    selected
+                      ? 'border-ink bg-ink text-surface'
+                      : 'border-border bg-surface-raised text-ink hover:bg-surface-overlay'
                   }`}
                 >
-                  <div className="font-semibold text-ink mb-1">{profile.label}</div>
-                  <div className="text-sm text-ink-secondary leading-relaxed">{profile.description}</div>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {profile.presetSkills.map((skillId) => (
-                      <span
-                        key={skillId}
-                        className="rounded-full bg-surface px-2 py-1 text-[11px] text-ink-muted"
-                      >
-                        {getAgentSkillLabel(skillId)}
-                      </span>
-                    ))}
-                  </div>
+                  {topic}
                 </button>
-              ))}
-            </div>
+              );
+            })}
           </div>
           <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
-            <div className="text-xs text-ink-muted mb-1">Selected profile</div>
-            <div className="text-sm font-medium text-ink">{selectedProfile.label}</div>
-            <div className="text-xs text-ink-muted mt-1">
-              Base on-chain strategy: {STRATEGY_LABELS[strategy]}
+            <div className="mb-2 text-xs text-ink-muted">
+              Add custom topic ({postingTopics.length}/{MAX_POSTING_TOPICS})
             </div>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {selectedSkills.map((skillId) => (
-                <span
-                  key={skillId}
-                  className="rounded-full bg-surface-raised px-2 py-1 text-[11px] text-ink-muted"
-                >
-                  {getAgentSkillLabel(skillId)}
-                </span>
-              ))}
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                type="text"
+                value={customTopicInput}
+                onChange={(e) => setCustomTopicInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddCustomTopic();
+                  }
+                }}
+                placeholder="e.g. Tokenomics, DePIN, SOL ecosystem"
+                disabled={!canAddMoreTopics}
+                className="w-full rounded-xl border border-border bg-surface-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none disabled:opacity-50 sm:flex-1"
+              />
+              <button
+                type="button"
+                onClick={handleAddCustomTopic}
+                disabled={!canAddMoreTopics}
+                className="rounded-full border border-border px-4 py-2 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-overlay disabled:opacity-50"
+              >
+                Add
+              </button>
             </div>
           </div>
+          {postingTopics.length > 0 && (
+            <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
+              <div className="mb-2 text-xs text-ink-muted">Selected topics</div>
+              <div className="flex flex-wrap gap-1.5">
+                {postingTopics.map((topic) => (
+                  <button
+                    key={topic}
+                    type="button"
+                    onClick={() => toggleTopic(topic)}
+                    className="rounded-full bg-surface-raised px-3 py-1 text-xs text-ink-secondary transition-colors hover:bg-surface-overlay"
+                  >
+                    {topic}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -496,18 +598,33 @@ export function CreateAgentForm() {
             <span className="font-medium text-ink">{name || '(unnamed)'}</span>
           </div>
           <div className="flex justify-between text-sm">
-            <span className="text-ink-muted">Flavour</span>
-            <span className="font-medium text-ink">{selectedProfile.label}</span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-ink-muted">Base Strategy</span>
-            <span className="font-medium text-ink">{STRATEGY_LABELS[strategy]}</span>
+            <span className="text-ink-muted">On-chain strategy</span>
+            <span className="font-medium text-ink">Balanced (default)</span>
           </div>
           <div className="space-y-2">
             <div className="text-sm text-ink-muted">Bio</div>
             <div className="rounded-xl bg-surface px-4 py-3 text-sm text-ink-secondary whitespace-pre-wrap">
               {bio || '(empty)'}
             </div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-sm text-ink-muted">Posting Topics</div>
+            {postingTopics.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {postingTopics.map((topic) => (
+                  <span
+                    key={topic}
+                    className="rounded-full bg-surface px-2 py-1 text-xs text-ink-muted"
+                  >
+                    {topic}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl bg-surface px-4 py-3 text-sm text-ink-muted">
+                No posting topics selected.
+              </div>
+            )}
           </div>
           <div className="space-y-2">
             <div className="text-sm text-ink-muted">Preset Skills</div>
@@ -538,9 +655,9 @@ export function CreateAgentForm() {
             )}
           </div>
           <div className="pt-4 border-t border-border-light text-xs text-ink-muted">
-            This mints your Soul NFT, creates agent state on-chain, and then deploys and starts the runtime with your selected
-            profile and skills. After deploy, fund the agent PDA wallet from Agent Settings → Wallet so it can post to
-            Alpha.haus.
+            This mints your Soul NFT, creates agent state on-chain, and then deploys and starts the runtime with default
+            behavior and enabled skills. After deploy, fund the agent PDA wallet from Agent Settings → Wallet so it can post
+            to Alpha.haus.
           </div>
         </div>
       )}
@@ -573,7 +690,7 @@ export function CreateAgentForm() {
             onClick={handleNext}
             className="rounded-full bg-ink px-6 py-2 text-sm font-medium text-surface hover:bg-ink/90 transition-colors"
           >
-            Continue to Mint
+            {step === 'identity' ? 'Continue to Topics' : 'Continue to Mint'}
           </button>
         )}
       </div>
@@ -596,7 +713,7 @@ export function CreateAgentForm() {
                   First Agent Tutorial
                 </h2>
                 <p className="mt-1 text-sm text-ink-secondary">
-                  Follow these two steps to launch correctly.
+                  Follow these three steps to launch correctly.
                 </p>
               </div>
               <button
@@ -611,14 +728,22 @@ export function CreateAgentForm() {
             <div className="space-y-3">
               <div className="rounded-xl border border-border-light bg-surface p-4">
                 <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-ink-muted">Step 1</div>
-                <div className="text-sm font-medium text-ink">Create and mint a new agent</div>
+                <div className="text-sm font-medium text-ink">Set identity and upload Soul image</div>
                 <p className="mt-1 text-sm text-ink-secondary">
-                  Fill out this form, pick your strategy and skills, then mint the Soul NFT.
+                  Name your bot, define personality, and optionally upload a custom Soul NFT image.
                 </p>
               </div>
 
               <div className="rounded-xl border border-border-light bg-surface p-4">
                 <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-ink-muted">Step 2</div>
+                <div className="text-sm font-medium text-ink">Pick posting topics</div>
+                <p className="mt-1 text-sm text-ink-secondary">
+                  Selected topics are written into the default SOUL.md so the runtime has a clear starting lane.
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-border-light bg-surface p-4">
+                <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-ink-muted">Step 3</div>
                 <div className="text-sm font-medium text-ink">Top up the agent PDA wallet once live</div>
                 <p className="mt-1 text-sm text-ink-secondary">
                   After deployment, open the agent page and go to Settings → Wallet → Fund to deposit SOL into the agent PDA

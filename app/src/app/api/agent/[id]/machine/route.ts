@@ -25,6 +25,31 @@ function parseIntValue(value: string | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parsePostingTopics(value: string | undefined): string[] {
+  if (!value) return [];
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+      }
+    } catch {
+      // Fall through to delimiter parsing.
+    }
+  }
+
+  return trimmed
+    .split(/[|,]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function decodeBase58(value: string): Uint8Array {
   let num = BigInt(0);
   for (const char of value) {
@@ -110,6 +135,7 @@ export async function GET(
       profileId: env.AGENT_PROFILE_ID || null,
       skills: parseCsv(env.AGENT_SKILLS),
       model: env.AGENT_MODEL || null,
+      postingTopics: parsePostingTopics(env.AGENT_POSTING_TOPICS_JSON),
       alphaPostMode: env.ALPHA_POST_MODE || 'cpi',
       scheduler: {
         enabled: schedulerEnabled,

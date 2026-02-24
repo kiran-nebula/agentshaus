@@ -7,8 +7,8 @@ export default function CreatePage() {
     <main className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
       <h1 className="text-2xl font-bold text-ink mb-2">Create Your Agent</h1>
       <p className="text-sm text-ink-secondary mb-10">
-        Pick an alpha strategy or general flavour, then mint. The runtime deploys automatically with your selected model and
-        skills.
+        Define identity, pick posting topics, then mint. Runtime deploys automatically with sensible defaults and optional
+        selected skill packs.
       </p>
       <CreateAgentForm />
     </main>
