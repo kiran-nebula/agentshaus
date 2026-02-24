@@ -52,6 +52,7 @@ const TOPIC_SUGGESTIONS = [
 ];
 const MAX_POSTING_TOPICS = 8;
 const MAX_TOPIC_LENGTH = 48;
+const MAX_GROK_API_KEY_LENGTH = 300;
 
 async function fetchSharedExecutorAddress(): Promise<string> {
   const response = await fetch('/api/runtime/executor', {
@@ -105,6 +106,8 @@ export function CreateAgentForm() {
   const [bio, setBio] = useState('');
   const [postingTopics, setPostingTopics] = useState<string[]>([]);
   const [customTopicInput, setCustomTopicInput] = useState('');
+  const [enableGrokSkill, setEnableGrokSkill] = useState(false);
+  const [grokApiKey, setGrokApiKey] = useState('');
   const [extraSkills, setExtraSkills] = useState<string[]>([]);
   const [loadedSkillsFromQuery, setLoadedSkillsFromQuery] = useState(false);
   const [soulImageFile, setSoulImageFile] = useState<File | null>(null);
@@ -116,7 +119,11 @@ export function CreateAgentForm() {
 
   const stepIndex = STEPS.indexOf(step);
   const selectedSkills = Array.from(
-    new Set([...DEFAULT_RUNTIME_SKILLS, ...extraSkills]),
+    new Set([
+      ...DEFAULT_RUNTIME_SKILLS,
+      ...(enableGrokSkill ? ['grok-writer'] : []),
+      ...extraSkills,
+    ]),
   );
   const canAddMoreTopics = postingTopics.length < MAX_POSTING_TOPICS;
 
@@ -127,9 +134,11 @@ export function CreateAgentForm() {
       .map((skill) => skill.trim())
       .filter(Boolean)
       .filter((skill) => KNOWN_QUERY_SKILLS.has(skill));
+    const hasGrokSkill = fromQuery.includes('grok-writer');
     if (fromQuery.length > 0) {
-      setExtraSkills(fromQuery);
+      setExtraSkills(fromQuery.filter((skill) => skill !== 'grok-writer'));
     }
+    if (hasGrokSkill) setEnableGrokSkill(true);
     setLoadedSkillsFromQuery(true);
   }, [loadedSkillsFromQuery, searchParams]);
 
@@ -204,6 +213,10 @@ export function CreateAgentForm() {
     }
     if (step === 'identity' && !bio.trim()) {
       setError('Agent bio is required');
+      return;
+    }
+    if (step === 'identity' && enableGrokSkill && !grokApiKey.trim()) {
+      setError('Grok API key is required when Grok skill is enabled');
       return;
     }
     if (step === 'topics' && postingTopics.length === 0) {
@@ -336,6 +349,11 @@ export function CreateAgentForm() {
       localStorage.setItem(`agent-deploy-preset:${soulAssetAddress}`, JSON.stringify(deployPreset));
       localStorage.setItem(`agent-name:${soulAssetAddress}`, name.trim());
       localStorage.setItem(`agent-soul-text:${soulAssetAddress}`, bio.trim());
+      if (enableGrokSkill && grokApiKey.trim()) {
+        localStorage.setItem(`agent-grok-api-key:${soulAssetAddress}`, grokApiKey.trim());
+      } else {
+        localStorage.removeItem(`agent-grok-api-key:${soulAssetAddress}`);
+      }
       localStorage.setItem(
         `agent-posting-topics:${soulAssetAddress}`,
         JSON.stringify(postingTopics),
@@ -352,6 +370,9 @@ export function CreateAgentForm() {
               skills: selectedSkills,
               model: null,
               soulText: bio.trim(),
+              ...(enableGrokSkill && grokApiKey.trim()
+                ? { grokApiKey: grokApiKey.trim() }
+                : {}),
               postingTopics,
             }),
           });
@@ -490,6 +511,53 @@ export function CreateAgentForm() {
                 Default on-chain strategy: Balanced
               </div>
             </div>
+          </div>
+          <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={enableGrokSkill}
+                onChange={(e) => {
+                  setEnableGrokSkill(e.target.checked);
+                  if (!e.target.checked) {
+                    setGrokApiKey('');
+                    setError(null);
+                  }
+                }}
+                className="mt-0.5 h-4 w-4 rounded border-border text-brand-500 focus:ring-brand-500"
+              />
+              <span className="text-sm text-ink-secondary">
+                Enable Grok Writer skill for X-style writing.
+              </span>
+            </label>
+            <a
+              href="https://clawhub.ai/castanley/grok"
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 inline-block text-xs text-brand-500 underline-offset-2 hover:underline"
+            >
+              View Grok skill
+            </a>
+            {enableGrokSkill && (
+              <div className="mt-3">
+                <label className="mb-1.5 block text-xs font-medium text-ink-muted">
+                  Grok API Key
+                </label>
+                <input
+                  type="password"
+                  value={grokApiKey}
+                  onChange={(e) =>
+                    setGrokApiKey(e.target.value.slice(0, MAX_GROK_API_KEY_LENGTH))
+                  }
+                  placeholder="xai-..."
+                  autoComplete="off"
+                  className="w-full rounded-xl border border-border bg-surface-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none"
+                />
+                <p className="mt-1.5 text-xs text-ink-muted">
+                  Stored for this agent and injected into runtime as `GROK_API_KEY`.
+                </p>
+              </div>
+            )}
           </div>
           {selectedSkills.length > 0 && (
             <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
@@ -639,6 +707,14 @@ export function CreateAgentForm() {
               ))}
             </div>
           </div>
+          {enableGrokSkill && (
+            <div className="space-y-2">
+              <div className="text-sm text-ink-muted">Grok Skill Credential</div>
+              <div className="rounded-xl bg-surface px-4 py-3 text-sm text-ink-secondary">
+                {grokApiKey.trim() ? 'Configured' : 'Missing API key'}
+              </div>
+            </div>
+          )}
           <div className="space-y-2">
             <div className="text-sm text-ink-muted">Soul NFT Image</div>
             {soulImagePreviewUrl ? (

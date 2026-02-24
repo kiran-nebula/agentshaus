@@ -135,6 +135,7 @@ export async function GET(
       profileId: env.AGENT_PROFILE_ID || null,
       skills: parseCsv(env.AGENT_SKILLS),
       model: env.AGENT_MODEL || null,
+      hasGrokApiKey: Boolean((env.GROK_API_KEY || '').trim()),
       postingTopics: parsePostingTopics(env.AGENT_POSTING_TOPICS_JSON),
       alphaPostMode: env.ALPHA_POST_MODE || 'cpi',
       scheduler: {

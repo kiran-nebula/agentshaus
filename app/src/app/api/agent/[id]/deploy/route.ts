@@ -15,6 +15,7 @@ const ALPHA_RUNTIME_PROFILES = new Set([
 const MAX_RUNTIME_SOUL_TEXT_LENGTH = 4_000;
 const MAX_POSTING_TOPICS = 12;
 const MAX_POSTING_TOPIC_LENGTH = 80;
+const MAX_GROK_API_KEY_LENGTH = 600;
 
 function getRpc(): Rpc<SolanaRpcApi> {
   if (!rpc) {
@@ -93,6 +94,18 @@ function normalizeRuntimeSoulText(value: unknown): string {
     .replace(/\u0000/g, '')
     .trim()
     .slice(0, MAX_RUNTIME_SOUL_TEXT_LENGTH);
+}
+
+function normalizeRuntimeSecret(
+  value: unknown,
+  maxLength = MAX_GROK_API_KEY_LENGTH,
+): string {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\r/g, '')
+    .replace(/\u0000/g, '')
+    .trim()
+    .slice(0, maxLength);
 }
 
 function normalizePostingTopic(value: unknown): string | null {
@@ -222,7 +235,16 @@ export async function POST(
 
     // 2. Parse request body
     const body = await request.json();
-    const { force, profileId, skills, model, scheduler, soulText, postingTopics } = body;
+    const {
+      force,
+      profileId,
+      skills,
+      model,
+      scheduler,
+      soulText,
+      postingTopics,
+      grokApiKey,
+    } = body;
     const sharedExecutorKeypair = getSharedExecutorKeypair();
     let runtimeExecutor: string;
     try {
@@ -289,6 +311,7 @@ export async function POST(
         : 'alpha-maintenance';
     const requestedSoulText = normalizeRuntimeSoulText(soulText);
     const requestedPostingTopics = normalizePostingTopics(postingTopics);
+    const requestedGrokApiKey = normalizeRuntimeSecret(grokApiKey);
 
     // 3. Check if machine already exists
     const fly = getFlyClient();
@@ -297,6 +320,13 @@ export async function POST(
       existing?.config?.env?.AGENT_SOUL_TEXT,
     );
     const runtimeSoulText = requestedSoulText || existingSoulText;
+    const existingGrokApiKey = normalizeRuntimeSecret(
+      existing?.config?.env?.GROK_API_KEY,
+    );
+    const runtimeGrokApiKey =
+      requestedGrokApiKey ||
+      existingGrokApiKey ||
+      normalizeRuntimeSecret(process.env.GROK_API_KEY);
     const existingPostingTopics = parsePostingTopicsFromEnv(
       existing?.config?.env?.AGENT_POSTING_TOPICS_JSON ||
         existing?.config?.env?.AGENT_POSTING_TOPICS,
@@ -359,6 +389,7 @@ export async function POST(
         AGENT_SKILLS: normalizedSkills.join(','),
         AGENT_MODEL: normalizedModel,
         AGENT_SOUL_TEXT: runtimeSoulText,
+        GROK_API_KEY: runtimeGrokApiKey,
         AGENT_POSTING_TOPICS_JSON:
           runtimePostingTopics.length > 0
             ? JSON.stringify(runtimePostingTopics)

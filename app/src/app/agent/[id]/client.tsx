@@ -35,6 +35,7 @@ interface MachineInfo {
   profileId?: string | null;
   skills?: string[];
   model?: string | null;
+  hasGrokApiKey?: boolean;
   postingTopics?: string[];
   scheduler?: {
     enabled?: boolean | null;
@@ -1128,6 +1129,10 @@ export function AgentDetailClient({ soulMint }: Props) {
         typeof window !== 'undefined'
           ? localStorage.getItem(`agent-soul-text:${soulMint}`)?.trim() || ''
           : '';
+      const storedGrokApiKey =
+        typeof window !== 'undefined'
+          ? localStorage.getItem(`agent-grok-api-key:${soulMint}`)?.trim() || ''
+          : '';
       const storedPostingTopicsRaw =
         typeof window !== 'undefined'
           ? localStorage.getItem(`agent-posting-topics:${soulMint}`)
@@ -1144,6 +1149,7 @@ export function AgentDetailClient({ soulMint }: Props) {
         skills: deployPreset.skills,
         model: deployPreset.model,
         ...(storedSoulText ? { soulText: storedSoulText } : {}),
+        ...(storedGrokApiKey ? { grokApiKey: storedGrokApiKey } : {}),
         ...(runtimePostingTopics.length > 0
           ? { postingTopics: runtimePostingTopics }
           : {}),
