@@ -15,6 +15,325 @@ const DEFAULT_RUNTIME_SCHEDULER_MODE = 'alpha-maintenance';
 const DEFAULT_RUNTIME_SCHEDULER_ENABLED = 'true';
 const DEFAULT_RUNTIME_SCHEDULER_INTERVAL_MINUTES = '10';
 const DEFAULT_RUNTIME_AUTO_RECLAIM = 'false';
+const AUTO_RECLAIM_MEMO_ENV_KEY = 'AGENT_AUTO_RECLAIM_MEMO';
+const POSTING_TOPICS_JSON_ENV_KEY = 'AGENT_POSTING_TOPICS_JSON';
+const POSTING_TOPICS_CSV_ENV_KEY = 'AGENT_POSTING_TOPICS';
+const MAX_AUTO_RECLAIM_MEMO_LENGTH = 560;
+const MAX_POSTING_TOPICS = 12;
+const MAX_POSTING_TOPIC_LENGTH = 80;
+
+type RuntimeAutoReclaimContentCommand =
+  | { action: 'show' }
+  | {
+      action: 'set';
+      updates: Partial<{
+        memo: string;
+        clearMemo: true;
+        topics: string[];
+        clearTopics: true;
+      }>;
+    }
+  | { action: 'help' }
+  | { action: 'invalid'; reason: string };
+
+function normalizeCommandWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function normalizePostingTopic(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = normalizeCommandWhitespace(value).slice(0, MAX_POSTING_TOPIC_LENGTH);
+  return normalized || null;
+}
+
+function normalizePostingTopics(values: unknown[]): string[] {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of values) {
+    const normalized = normalizePostingTopic(entry);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(normalized);
+    if (deduped.length >= MAX_POSTING_TOPICS) break;
+  }
+
+  return deduped;
+}
+
+function parsePostingTopicsInput(value: string): string[] {
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return normalizePostingTopics(parsed);
+      }
+    } catch {
+      // Fall through to delimiter parsing.
+    }
+  }
+
+  return normalizePostingTopics(trimmed.split(/[|,]/));
+}
+
+function normalizeAutoReclaimMemo(value: string): string | null {
+  const normalized = normalizeCommandWhitespace(value)
+    .replace(/^["'`]+/, '')
+    .replace(/["'`]+$/, '');
+  if (!normalized) return null;
+  return normalized.slice(0, MAX_AUTO_RECLAIM_MEMO_LENGTH);
+}
+
+function parseMemoValue(rawValue: string): RuntimeAutoReclaimContentCommand {
+  const value = rawValue.trim();
+  if (!value) {
+    return {
+      action: 'invalid',
+      reason: 'Provide memo text, e.g. `/reclaim memo reclaiming with a Solana market update`',
+    };
+  }
+
+  if (/^(clear|off|none|reset|default)$/i.test(value)) {
+    return { action: 'set', updates: { clearMemo: true } };
+  }
+
+  const memo = normalizeAutoReclaimMemo(value);
+  if (!memo) {
+    return {
+      action: 'invalid',
+      reason: 'Memo text cannot be empty',
+    };
+  }
+
+  return { action: 'set', updates: { memo } };
+}
+
+function parseTopicsValue(rawValue: string): RuntimeAutoReclaimContentCommand {
+  const value = rawValue.trim();
+  if (!value) {
+    return {
+      action: 'invalid',
+      reason: 'Provide topics, e.g. `/reclaim topics Solana, AI agents, market structure`',
+    };
+  }
+
+  if (/^(clear|off|none|reset|default)$/i.test(value)) {
+    return { action: 'set', updates: { clearTopics: true } };
+  }
+
+  const topics = parsePostingTopicsInput(value);
+  if (topics.length === 0) {
+    return {
+      action: 'invalid',
+      reason: 'No valid topics found. Use comma-separated values.',
+    };
+  }
+
+  return { action: 'set', updates: { topics } };
+}
+
+function parseRuntimeAutoReclaimContentCommand(
+  message: string,
+): RuntimeAutoReclaimContentCommand | null {
+  const trimmed = message.trim();
+  const lower = trimmed.toLowerCase();
+
+  if (trimmed === '/') {
+    return { action: 'help' };
+  }
+
+  const setMatch = /^\/set\s+(?:auto[\s-]?reclaim|reclaim)\s+(memo|message|topic|topics)\s+(.+)$/i.exec(
+    trimmed,
+  );
+  if (setMatch) {
+    const field = setMatch[1].toLowerCase();
+    const value = setMatch[2].trim();
+    if (field === 'memo' || field === 'message') {
+      return parseMemoValue(value);
+    }
+    return parseTopicsValue(value);
+  }
+
+  const commandMatch = /^\/(?:auto[\s-]?reclaim|reclaim)\b(.*)$/i.exec(trimmed);
+  if (!commandMatch) return null;
+
+  const rest = commandMatch[1]?.trim() || '';
+  const restLower = rest.toLowerCase();
+  if (!rest || restLower === 'help') {
+    return { action: 'help' };
+  }
+
+  if (/^(show|status|settings?|config(?:uration)?|current)\b/.test(restLower)) {
+    return { action: 'show' };
+  }
+
+  const memoMatch = /^memo\b[:=\s-]*(.*)$/i.exec(rest);
+  if (memoMatch) {
+    return parseMemoValue(memoMatch[1] || '');
+  }
+
+  const topicsMatch = /^(topic|topics)\b[:=\s-]*(.*)$/i.exec(rest);
+  if (topicsMatch) {
+    return parseTopicsValue(topicsMatch[2] || '');
+  }
+
+  if (
+    /^set\s+memo\b/.test(restLower) ||
+    /^set\s+(topic|topics)\b/.test(restLower)
+  ) {
+    const setInnerMatch = /^set\s+(memo|message|topic|topics)\b[:=\s-]*(.*)$/i.exec(
+      rest,
+    );
+    if (setInnerMatch) {
+      const field = setInnerMatch[1].toLowerCase();
+      const value = setInnerMatch[2] || '';
+      if (field === 'memo' || field === 'message') {
+        return parseMemoValue(value);
+      }
+      return parseTopicsValue(value);
+    }
+  }
+
+  if (lower.startsWith('/reclaim') || lower.startsWith('/auto-reclaim')) {
+    return {
+      action: 'invalid',
+      reason: 'Unknown reclaim command. Use `/reclaim help` for supported commands.',
+    };
+  }
+
+  return null;
+}
+
+function parsePostingTopicsFromRuntimeEnv(env: Record<string, string>): string[] {
+  const raw = (env[POSTING_TOPICS_JSON_ENV_KEY] || env[POSTING_TOPICS_CSV_ENV_KEY] || '').trim();
+  if (!raw) return [];
+  return parsePostingTopicsInput(raw);
+}
+
+function resolveRuntimeAutoReclaimContentEnv(env: Record<string, string>) {
+  return {
+    memo: normalizeAutoReclaimMemo(env[AUTO_RECLAIM_MEMO_ENV_KEY] || '') || '',
+    topics: parsePostingTopicsFromRuntimeEnv(env),
+  };
+}
+
+function formatRuntimeAutoReclaimContent(
+  machineId: string,
+  env: ReturnType<typeof resolveRuntimeAutoReclaimContentEnv>,
+): string {
+  const memoDisplay = env.memo ? env.memo : '(unset)';
+  const topicsDisplay = env.topics.length > 0 ? env.topics.join(', ') : '(unset)';
+  return [
+    `Auto reclaim content (${machineId.slice(0, 12)}):`,
+    `- ${AUTO_RECLAIM_MEMO_ENV_KEY}=${memoDisplay}`,
+    `- ${POSTING_TOPICS_JSON_ENV_KEY}=${topicsDisplay}`,
+    '- Resolution order: AGENT_AUTO_RECLAIM_MEMO -> SOUL memo -> posting topics context.',
+  ].join('\n');
+}
+
+function buildRuntimeAutoReclaimContentHelpText(): string {
+  return [
+    'Auto reclaim slash commands:',
+    '- `/reclaim show`',
+    '- `/reclaim memo <text>`',
+    '- `/reclaim memo clear`',
+    '- `/reclaim topics <topic1, topic2>`',
+    '- `/reclaim topics clear`',
+    '- `/set reclaim memo <text>`',
+    '- `/set reclaim topics <topic1, topic2>`',
+  ].join('\n');
+}
+
+async function runRuntimeAutoReclaimContentCommand(
+  command: RuntimeAutoReclaimContentCommand,
+  soulMint: string,
+): Promise<string> {
+  if (command.action === 'help') {
+    return buildRuntimeAutoReclaimContentHelpText();
+  }
+
+  if (command.action === 'invalid') {
+    return `Auto reclaim command error: ${command.reason}\n\n${buildRuntimeAutoReclaimContentHelpText()}`;
+  }
+
+  const fly = getFlyClient();
+  const machine = await fly.findMachineForAgent(soulMint);
+  if (!machine) {
+    return 'Auto reclaim command failed: agent runtime is not deployed.';
+  }
+
+  const currentEnv = machine.config?.env || {};
+  const resolvedCurrent = resolveRuntimeAutoReclaimContentEnv(currentEnv);
+  if (command.action === 'show') {
+    return formatRuntimeAutoReclaimContent(machine.id, resolvedCurrent);
+  }
+
+  const nextResolved = {
+    ...resolvedCurrent,
+  };
+
+  if (command.updates.clearMemo) {
+    nextResolved.memo = '';
+  } else if (typeof command.updates.memo === 'string') {
+    nextResolved.memo = command.updates.memo;
+  }
+
+  if (command.updates.clearTopics) {
+    nextResolved.topics = [];
+  } else if (Array.isArray(command.updates.topics)) {
+    nextResolved.topics = normalizePostingTopics(command.updates.topics);
+  }
+
+  const nextEnv = {
+    ...currentEnv,
+    [AUTO_RECLAIM_MEMO_ENV_KEY]: nextResolved.memo,
+    [POSTING_TOPICS_JSON_ENV_KEY]:
+      nextResolved.topics.length > 0
+        ? JSON.stringify(nextResolved.topics)
+        : '',
+    [POSTING_TOPICS_CSV_ENV_KEY]: nextResolved.topics.join('|'),
+  };
+
+  await fly.updateMachineConfig(machine.id, {
+    ...machine.config,
+    env: nextEnv,
+  });
+
+  let restartStatus = '- restart: not required';
+  if (machine.state === 'started' || machine.state === 'starting') {
+    try {
+      await fly.restartMachine(machine.id);
+      restartStatus = '- restart: requested';
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'restart failed';
+      restartStatus = `- restart: skipped (${message})`;
+    }
+  }
+
+  return [
+    'Updated auto reclaim content settings.',
+    formatRuntimeAutoReclaimContent(machine.id, nextResolved),
+    restartStatus,
+  ].join('\n');
+}
+
+async function runRuntimeAutoReclaimContentCommandSafe(
+  command: RuntimeAutoReclaimContentCommand,
+  soulMint: string,
+): Promise<string> {
+  try {
+    return await runRuntimeAutoReclaimContentCommand(command, soulMint);
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : 'unknown auto reclaim content error';
+    return `Auto reclaim command failed: ${message}`;
+  }
+}
 
 function parseCronCadence(messageLower: string):
   | { intervalMinutes?: number; cronExpression?: string; cadenceLabel: string }
@@ -768,6 +1087,16 @@ export async function POST(
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json({ error: 'message is required' }, { status: 400 });
+    }
+
+    const runtimeAutoReclaimContentCommand =
+      parseRuntimeAutoReclaimContentCommand(message);
+    if (runtimeAutoReclaimContentCommand) {
+      const response = await runRuntimeAutoReclaimContentCommandSafe(
+        runtimeAutoReclaimContentCommand,
+        soulMint,
+      );
+      return NextResponse.json({ response });
     }
 
     const runtimeSchedulerCommand = parseRuntimeSchedulerChatCommand(message);

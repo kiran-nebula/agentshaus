@@ -78,6 +78,38 @@ const CHAT_QUICK_PROMPTS = [
     message: 'Make a burn post with a concise memo.',
   },
 ] as const;
+const CHAT_SLASH_COMMANDS = [
+  {
+    label: 'Show auto reclaim settings',
+    command: '/reclaim show',
+    description: 'Show current auto-reclaim memo override and posting topics.',
+  },
+  {
+    label: 'Set auto reclaim memo',
+    command: '/reclaim memo ',
+    description: 'Set exact memo text used for auto-reclaim posts.',
+  },
+  {
+    label: 'Clear auto reclaim memo',
+    command: '/reclaim memo clear',
+    description: 'Clear memo override and fall back to Soul/topics context.',
+  },
+  {
+    label: 'Set auto reclaim topics',
+    command: '/reclaim topics ',
+    description: 'Set topics used when memo is not explicit in Soul.',
+  },
+  {
+    label: 'Show scheduler settings',
+    command: '/scheduler show settings',
+    description: 'Show runtime scheduler env configuration.',
+  },
+  {
+    label: 'Enable auto reclaim scheduler',
+    command: '/scheduler enable auto reclaim',
+    description: 'Turn on runtime auto-reclaim behavior.',
+  },
+] as const;
 
 function clampChatMessages(messages: Message[]): Message[] {
   if (messages.length <= MAX_CHAT_MESSAGES) return messages;
@@ -895,6 +927,56 @@ function ChatQuickPrompts({
   );
 }
 
+function ChatSlashCommandPicker({
+  input,
+  disabled,
+  onSelect,
+}: {
+  input: string;
+  disabled?: boolean;
+  onSelect: (command: string) => void;
+}) {
+  const normalized = input.trimStart();
+  if (!normalized.startsWith('/')) return null;
+
+  const query = normalized.slice(1).toLowerCase();
+  const matching = CHAT_SLASH_COMMANDS.filter((command) => {
+    if (!query) return true;
+    const haystack = `${command.command} ${command.label} ${command.description}`.toLowerCase();
+    return haystack.includes(query);
+  }).slice(0, 8);
+
+  if (matching.length === 0) {
+    return (
+      <div className="mx-2 mt-2 rounded-xl border border-border-light bg-surface px-3 py-2 text-xs text-ink-muted">
+        No matching slash command.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-2 mt-2 rounded-xl border border-border-light bg-surface p-1.5">
+      {matching.map((command) => (
+        <button
+          key={`${command.label}:${command.command}`}
+          type="button"
+          disabled={disabled}
+          onClick={() => onSelect(command.command)}
+          className="flex w-full items-start justify-between gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-surface-overlay disabled:opacity-40"
+        >
+          <span className="min-w-0">
+            <span className="block text-xs font-medium text-ink">{command.label}</span>
+            <span className="block text-[11px] text-ink-muted">{command.description}</span>
+          </span>
+          <span className="shrink-0 rounded-md border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-ink-muted">
+            {command.command}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /* ─── Main Component ─── */
 
 interface Props {
@@ -1161,6 +1243,17 @@ export function AgentDetailClient({ soulMint }: Props) {
     }
   };
 
+  const handleSelectSlashCommand = useCallback((command: string) => {
+    setInput(command);
+    setChatError(null);
+    requestAnimationFrame(() => {
+      if (!textareaRef.current) return;
+      textareaRef.current.focus();
+      const cursor = command.length;
+      textareaRef.current.setSelectionRange(cursor, cursor);
+    });
+  }, []);
+
   /* Machine actions */
   const handleDeploy = async () => {
     setChatError(null);
@@ -1397,12 +1490,17 @@ export function AgentDetailClient({ soulMint }: Props) {
             <h2 className="mb-6 text-xl font-semibold text-ink sm:mb-10 sm:text-2xl">What should your agent do?</h2>
             <div className="w-full max-w-2xl">
               <div className="rounded-2xl border border-border bg-surface-raised shadow-sm">
+                <ChatSlashCommandPicker
+                  input={input}
+                  disabled={chatLoading}
+                  onSelect={handleSelectSlashCommand}
+                />
                 <textarea
                   ref={textareaRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-                  placeholder="Ask anything..."
+                  placeholder="Ask anything... (type / for commands)"
                   rows={1}
                   className="w-full resize-none bg-transparent px-4 pb-2 pt-4 text-sm text-ink placeholder:text-ink-muted focus:outline-none sm:px-5 sm:pt-5 sm:text-base"
                 />
@@ -1478,12 +1576,17 @@ export function AgentDetailClient({ soulMint }: Props) {
             <div className="shrink-0 border-t border-border-light px-3 py-3 sm:px-4">
               <div className="max-w-2xl mx-auto">
                 <div className="rounded-2xl border border-border bg-surface-raised">
+                  <ChatSlashCommandPicker
+                    input={input}
+                    disabled={chatLoading}
+                    onSelect={handleSelectSlashCommand}
+                  />
                   <textarea
                     ref={textareaRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-                    placeholder="Message your agent..."
+                    placeholder="Message your agent... (type / for commands)"
                     disabled={chatLoading}
                     rows={1}
                     className="w-full resize-none bg-transparent px-4 pb-1.5 pt-3.5 text-sm text-ink placeholder:text-ink-muted focus:outline-none disabled:opacity-50 sm:px-5 sm:pt-4 sm:text-base"

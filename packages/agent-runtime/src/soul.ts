@@ -111,8 +111,42 @@ function extractStyleSnippet(personality: string): string | null {
   return firstSentence.slice(0, MAX_STYLE_SNIPPET_LENGTH);
 }
 
+function extractPostingTopicsFromSoulDocument(soulDocument: string): string[] {
+  const normalized = soulDocument.replace(/\r/g, '');
+  const match = normalized.match(/^\s*Primary posting topics:\s*(.+)$/im);
+  if (!match || !match[1]) return [];
+
+  const value = match[1].trim();
+  if (!value || /^follow explicit user requests\.?$/i.test(value)) return [];
+  return normalizePostingTopics(value);
+}
+
+function mergePostingTopics(primary: string[], fallback: string[]): string[] {
+  return normalizePostingTopics([...primary, ...fallback]);
+}
+
+function joinTopicsForSentence(topics: string[]): string {
+  if (topics.length === 1) return topics[0];
+  if (topics.length === 2) return `${topics[0]} and ${topics[1]}`;
+  const head = topics.slice(0, topics.length - 1).join(', ');
+  const tail = topics[topics.length - 1];
+  return `${head}, and ${tail}`;
+}
+
+function buildTopicContextReclaimMemo(topics: string[]): string | null {
+  if (topics.length === 0) return null;
+  const selected = topics.slice(0, 3);
+  return `Reclaiming TOP ALPHA while keeping the feed focused on ${joinTopicsForSentence(selected)}.`;
+}
+
 function getSoulTextFromEnv(): string {
   return sanitizeSoulText(process.env.AGENT_SOUL_TEXT);
+}
+
+function getAutoReclaimMemoOverrideFromEnv(): string | null {
+  const raw = (process.env.AGENT_AUTO_RECLAIM_MEMO || '').trim();
+  if (!raw) return null;
+  return trimMemo(raw);
 }
 
 function getPostingTopicsFromEnv(): string[] {
@@ -185,6 +219,16 @@ export async function getAutoReclaimMemoFromSoul(): Promise<string> {
   const soulDocument = await readSoulDocument();
   const personalityFromDocument = extractPersonalitySection(soulDocument);
   const personality = personalityFromDocument || getSoulTextFromEnv();
+  const postingTopics = mergePostingTopics(
+    extractPostingTopicsFromSoulDocument(soulDocument),
+    getPostingTopicsFromEnv(),
+  );
+
+  const memoOverride = getAutoReclaimMemoOverrideFromEnv();
+  if (memoOverride) {
+    memoCache = { value: memoOverride, expiresAt: Date.now() + MEMO_CACHE_TTL_MS };
+    return memoOverride;
+  }
 
   const customMemo = extractCustomReclaimMemo(personality);
   if (customMemo) {
@@ -193,9 +237,12 @@ export async function getAutoReclaimMemoFromSoul(): Promise<string> {
   }
 
   const styleSnippet = extractStyleSnippet(personality);
-  const generatedMemo = styleSnippet
-    ? trimMemo(`[auto-reclaim] Reclaiming TOP ALPHA. ${styleSnippet}`)
-    : AUTO_RECLAIM_MEMO_FALLBACK;
+  const topicContextMemo = buildTopicContextReclaimMemo(postingTopics);
+  const generatedMemo = topicContextMemo
+    ? trimMemo(styleSnippet ? `${topicContextMemo} ${styleSnippet}` : topicContextMemo)
+    : styleSnippet
+      ? trimMemo(`[auto-reclaim] Reclaiming TOP ALPHA. ${styleSnippet}`)
+      : AUTO_RECLAIM_MEMO_FALLBACK;
 
   memoCache = { value: generatedMemo, expiresAt: Date.now() + MEMO_CACHE_TTL_MS };
   return generatedMemo;
