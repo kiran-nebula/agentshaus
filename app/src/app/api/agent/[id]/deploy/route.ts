@@ -300,7 +300,7 @@ export async function POST(
     const schedulerAutoReclaim =
       parseBoolean(normalizedScheduler.autoReclaim) ??
       parseBoolean(process.env.RUNTIME_AUTO_RECLAIM) ??
-      true;
+      false;
     const schedulerModeRaw =
       typeof normalizedScheduler.mode === 'string' && normalizedScheduler.mode.trim()
         ? normalizedScheduler.mode.trim()

@@ -63,6 +63,21 @@ interface CronJobInfo {
 const CHAT_STORAGE_VERSION = 1;
 const MAX_PERSISTED_CHAT_MESSAGES = 120;
 const MAX_CHAT_MESSAGES = 120;
+const CHAT_QUICK_PROMPTS = [
+  {
+    label: 'Try to automatically reclaim lost Alpha spots',
+    message:
+      'Try to automatically reclaim lost Alpha spots. Enable runtime auto reclaim and keep scheduler enabled every 10 minutes.',
+  },
+  {
+    label: 'Make my first alpha post',
+    message: 'Make my first alpha post with a concise intro memo.',
+  },
+  {
+    label: 'Make a burn post',
+    message: 'Make a burn post with a concise memo.',
+  },
+] as const;
 
 function clampChatMessages(messages: Message[]): Message[] {
   if (messages.length <= MAX_CHAT_MESSAGES) return messages;
@@ -856,6 +871,30 @@ function ModelSelector({
   );
 }
 
+function ChatQuickPrompts({
+  disabled,
+  onSelect,
+}: {
+  disabled?: boolean;
+  onSelect: (message: string) => void;
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {CHAT_QUICK_PROMPTS.map((prompt) => (
+        <button
+          key={prompt.label}
+          type="button"
+          disabled={disabled}
+          onClick={() => onSelect(prompt.message)}
+          className="rounded-full border border-border-light bg-surface px-3 py-1 text-xs text-ink-secondary transition-colors hover:bg-surface-overlay disabled:opacity-40"
+        >
+          {prompt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /* ─── Main Component ─── */
 
 interface Props {
@@ -1079,9 +1118,10 @@ export function AgentDetailClient({ soulMint }: Props) {
   const isRunning = machineState === 'started';
 
   /* Chat */
-  const sendMessage = async () => {
-    if (!input.trim() || chatLoading) return;
-    const userMessage = input.trim();
+  const sendMessage = async (overrideMessage?: string) => {
+    if (chatLoading) return;
+    const userMessage = (overrideMessage ?? input).trim();
+    if (!userMessage) return;
     const modelForRequest = selectedModel;
     const history = clampChatMessages(messages);
     setInput('');
@@ -1376,11 +1416,24 @@ export function AgentDetailClient({ soulMint }: Props) {
                     setSelectedModel={setSelectedModel}
                     size="lg"
                   />
-                  <button type="button" onClick={sendMessage} disabled={!input.trim()} className="rounded-full p-2 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors disabled:opacity-30">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void sendMessage();
+                    }}
+                    disabled={!input.trim()}
+                    className="rounded-full p-2 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors disabled:opacity-30"
+                  >
                     <IconSend />
                   </button>
                 </div>
               </div>
+              <ChatQuickPrompts
+                disabled={chatLoading}
+                onSelect={(message) => {
+                  void sendMessage(message);
+                }}
+              />
             </div>
             {chatError && <div className="mt-4 text-xs text-danger bg-danger/5 rounded-xl px-3 py-2">{chatError}</div>}
           </div>
@@ -1444,11 +1497,24 @@ export function AgentDetailClient({ soulMint }: Props) {
                       selectedModel={selectedModel}
                       setSelectedModel={setSelectedModel}
                     />
-                    <button type="button" onClick={sendMessage} disabled={chatLoading || !input.trim()} className="rounded-full p-1.5 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors disabled:opacity-30">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void sendMessage();
+                      }}
+                      disabled={chatLoading || !input.trim()}
+                      className="rounded-full p-1.5 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors disabled:opacity-30"
+                    >
                       <IconSend />
                     </button>
                   </div>
                 </div>
+                <ChatQuickPrompts
+                  disabled={chatLoading}
+                  onSelect={(message) => {
+                    void sendMessage(message);
+                  }}
+                />
               </div>
             </div>
           </>
