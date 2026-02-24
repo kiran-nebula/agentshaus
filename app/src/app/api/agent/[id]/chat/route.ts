@@ -180,7 +180,7 @@ function parseRuntimeSchedulerChatCommand(message: string): RuntimeSchedulerChat
   const mentionsScheduler =
     /\bruntime\s+scheduler\b/.test(messageLower) || /\bscheduler\b/.test(messageLower);
   const mentionsAutoReclaim =
-    /auto[\s-]?reclaim|automatically\s+reclaim|reclaim\s+lost\s+alpha/.test(
+    /auto[\s-]?(reclaim|claim)|automatically\s+reclaim|reclaim\s+lost\s+alpha/.test(
       messageLower,
     );
   const mentionsSchedulerEnv =
@@ -314,15 +314,17 @@ function parseRuntimeSchedulerChatCommand(message: string): RuntimeSchedulerChat
   }
 
   const disableAutoReclaim =
-    /\b(disable|turn\s+off|stop|no|don'?t|do\s+not)\b[^.]*\b(auto[\s-]?reclaim|automatically\s+reclaim)\b/.test(
+    /\b(disable|dsiable|turn\s+off|stop|no|don'?t|do\s+not)\b[^.]*\b(auto[\s-]?(reclaim|claim)|automatically\s+reclaim)\b/.test(
       messageLower,
     ) ||
-    /\b(auto[\s-]?reclaim)\b[^.]*\b(off|disabled|false)\b/.test(messageLower);
+    /\b(auto[\s-]?(reclaim|claim))\b[^.]*\b(off|disabled|false)\b/.test(
+      messageLower,
+    );
   const enableAutoReclaim =
-    /\b(enable|turn\s+on|start|set|try)\b[^.]*\b(auto[\s-]?reclaim|automatically\s+reclaim|reclaim\s+lost\s+alpha)\b/.test(
+    /\b(enable|turn\s+on|start|set|try)\b[^.]*\b(auto[\s-]?(reclaim|claim)|automatically\s+reclaim|reclaim\s+lost\s+alpha)\b/.test(
       messageLower,
     ) ||
-    /\b(auto[\s-]?reclaim|automatically\s+reclaim|reclaim\s+lost\s+alpha)\b[^.]*\b(on|enabled|true)\b/.test(
+    /\b(auto[\s-]?(reclaim|claim)|automatically\s+reclaim|reclaim\s+lost\s+alpha)\b[^.]*\b(on|enabled|true)\b/.test(
       messageLower,
     );
 
