@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFlyClient, type FlyMachine } from '@/lib/fly-machines';
+import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
 
 type MachineStatus = {
   deployed: boolean;
@@ -7,6 +8,7 @@ type MachineStatus = {
   machineId: string | null;
   region: string | null;
   name: string | null;
+  runtimeProvider: string | null;
 };
 
 function normalizeSoulMints(value: unknown): string[] {
@@ -33,6 +35,7 @@ function emptyStatus(): MachineStatus {
     machineId: null,
     region: null,
     name: null,
+    runtimeProvider: null,
   };
 }
 
@@ -80,6 +83,10 @@ export async function POST(request: NextRequest) {
         machineId: machine.id || null,
         region: machine.region || null,
         name: machine.name || null,
+        runtimeProvider: normalizeRuntimeProvider(
+          machine.config?.env?.AGENT_RUNTIME_PROVIDER ||
+            machine.config?.env?.RUNTIME_PROVIDER,
+        ),
       };
     }
 

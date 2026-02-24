@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import type { Address } from '@solana/kit';
-import { useIdentityToken, usePrivy, useSolanaWallets } from '@privy-io/react-auth';
+import { useIdentityToken, useLinkAccount, usePrivy, useSolanaWallets } from '@privy-io/react-auth';
 import { fetchAgentsByOwners } from '@agents-haus/sdk';
 import { STRATEGY_LABELS, truncateAddress, type Strategy } from '@agents-haus/common';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
@@ -288,12 +288,14 @@ export default function FilesPage() {
   const [tree, setTree] = useState<FileTreeNode | null>(null);
   const [treeLoading, setTreeLoading] = useState(false);
   const [treeError, setTreeError] = useState<string | null>(null);
+  const [treeErrorHint, setTreeErrorHint] = useState<string | null>(null);
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadPath, setUploadPath] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
+  const { linkWallet } = useLinkAccount();
 
   const linkedWalletAddresses = useMemo(() => getLinkedSolanaWalletAddresses(user), [user]);
   const connectedWalletAddresses = useMemo(() => {
@@ -486,9 +488,17 @@ export default function FilesPage() {
       }).finally(() => window.clearTimeout(timeout));
       const payload = await res.json().catch(() => null);
       if (!res.ok) {
+        const hint =
+          payload &&
+          typeof payload === 'object' &&
+          typeof (payload as { authHint?: unknown }).authHint === 'string'
+            ? (payload as { authHint: string }).authHint
+            : null;
+        setTreeErrorHint(hint);
         throw new Error(formatFilesApiError(payload, 'Failed to load files'));
       }
 
+      setTreeErrorHint(null);
       if (Array.isArray(payload?.roots)) {
         const parsedRoots = payload.roots
           .map((root: any) => ({
@@ -513,6 +523,7 @@ export default function FilesPage() {
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         setTree(null);
+        setTreeErrorHint(null);
         setTreeError(
           `File tree request timed out after ${Math.floor(
             TREE_FETCH_TIMEOUT_MS / 1000,
@@ -837,6 +848,17 @@ export default function FilesPage() {
               {selectedAgentMint && treeError && !treeLoading && (
                 <div className="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-sm text-danger">
                   {treeError}
+                  {treeErrorHint === 'identity-token-present-but-owner-wallet-not-linked' && (
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        onClick={() => linkWallet()}
+                        className="rounded-lg border border-danger/30 bg-surface px-2.5 py-1 text-xs text-danger hover:bg-danger/10 transition-colors"
+                      >
+                        Link Wallet In Privy
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 

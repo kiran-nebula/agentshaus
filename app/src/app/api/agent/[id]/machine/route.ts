@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createKeyPairFromBytes, getAddressFromPublicKey } from '@solana/kit';
 import { getFlyClient } from '@/lib/fly-machines';
+import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
@@ -112,7 +113,7 @@ export async function GET(
     const machine = await fly.findMachineForAgent(soulMint);
 
     if (!machine) {
-      return NextResponse.json({ deployed: false });
+      return NextResponse.json({ deployed: false, runtimeProvider: null });
     }
 
     const env = machine.config?.env || {};
@@ -131,6 +132,9 @@ export async function GET(
       state: machine.state,
       region: machine.region,
       name: machine.name,
+      runtimeProvider: normalizeRuntimeProvider(
+        env.AGENT_RUNTIME_PROVIDER || env.RUNTIME_PROVIDER,
+      ),
       runtimeExecutor,
       profileId: env.AGENT_PROFILE_ID || null,
       skills: parseCsv(env.AGENT_SKILLS),

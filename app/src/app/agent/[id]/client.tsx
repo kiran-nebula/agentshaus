@@ -9,6 +9,11 @@ import { useSolanaRpc } from '@/hooks/use-solana-rpc';
 import { useAgentTransactions } from '@/hooks/use-agent-transactions';
 import { useSendTransaction } from '@/hooks/use-send-transaction';
 import { getPreferredSolanaWallet } from '@/lib/solana-wallet-preference';
+import {
+  DEFAULT_RUNTIME_PROVIDER,
+  normalizeRuntimeProvider,
+  type RuntimeProvider,
+} from '@/lib/runtime-provider';
 import { DEFAULT_LLM_MODELS } from '@agents-haus/common';
 import {
   Strategy,
@@ -31,6 +36,7 @@ interface MachineInfo {
   state?: string;
   region?: string;
   name?: string;
+  runtimeProvider?: RuntimeProvider | null;
   runtimeExecutor?: string | null;
   profileId?: string | null;
   skills?: string[];
@@ -167,6 +173,7 @@ interface DeployPreset {
   profileId: string;
   skills: string[];
   model: string | null;
+  runtimeProvider: RuntimeProvider;
 }
 
 /* ─── Icons ─── */
@@ -686,6 +693,9 @@ function SettingsModal({
                   {machineInfo && !machineInfo.deployed && (
                     <>
                       <div className="text-xs text-ink-muted mb-3">Runtime not deployed yet.</div>
+                      <div className="text-xs text-ink-muted mb-3">
+                        Runtime defaults to OpenClaw unless an IronClaw preset is saved for this agent.
+                      </div>
                       {isOwner && (
                         <button onClick={handleDeployRuntime} disabled={loading} className="w-full rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50">
                           Deploy Runtime
@@ -701,6 +711,12 @@ function SettingsModal({
                         <span className="text-ink font-medium">{machineState || 'unknown'}</span>
                       </div>
                       <div className="space-y-2 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-ink-muted">Runtime</span>
+                          <span className="font-mono text-ink">
+                            {machineInfo.runtimeProvider === 'ironclaw' ? 'ironclaw' : 'openclaw'}
+                          </span>
+                        </div>
                         <div className="flex justify-between"><span className="text-ink-muted">Region</span><span className="font-mono text-ink">{machineInfo.region || '—'}</span></div>
                         <div className="flex justify-between"><span className="text-ink-muted">Machine</span><span className="font-mono text-ink-muted">{machineInfo.machineId?.slice(0, 12) || '—'}</span></div>
                         <div className="flex justify-between"><span className="text-ink-muted">Runtime executor</span><span className="font-mono text-ink">{runtimeExecutor ? truncateAddress(runtimeExecutor, 8) : '—'}</span></div>
@@ -1004,6 +1020,7 @@ export function AgentDetailClient({ soulMint }: Props) {
     profileId: 'balanced',
     skills: [],
     model: null,
+    runtimeProvider: DEFAULT_RUNTIME_PROVIDER,
   });
 
   // Chat
@@ -1090,6 +1107,7 @@ export function AgentDetailClient({ soulMint }: Props) {
             ? parsed.skills.filter((v: unknown) => typeof v === 'string')
             : [],
           model: typeof parsed.model === 'string' ? parsed.model : null,
+          runtimeProvider: normalizeRuntimeProvider(parsed.runtimeProvider),
         };
       } catch {
         fromStorage = null;
@@ -1108,6 +1126,9 @@ export function AgentDetailClient({ soulMint }: Props) {
       typeof machineInfo?.model === 'string' && machineInfo.model.trim()
         ? machineInfo.model.trim()
         : null;
+    const machineRuntimeProvider = normalizeRuntimeProvider(
+      machineInfo?.runtimeProvider,
+    );
 
     const merged: DeployPreset = {
       profileId: queryProfile || fromStorage?.profileId || machineProfile || 'balanced',
@@ -1115,9 +1136,13 @@ export function AgentDetailClient({ soulMint }: Props) {
         querySkillsList.length > 0
           ? querySkillsList
           : fromStorage?.skills?.length
-            ? fromStorage.skills
-            : machineSkills,
+          ? fromStorage.skills
+          : machineSkills,
       model: queryModel || fromStorage?.model || machineModel || null,
+      runtimeProvider:
+        fromStorage?.runtimeProvider ||
+        machineRuntimeProvider ||
+        DEFAULT_RUNTIME_PROVIDER,
     };
 
     setDeployPreset(merged);
@@ -1281,6 +1306,7 @@ export function AgentDetailClient({ soulMint }: Props) {
         profileId: deployPreset.profileId,
         skills: deployPreset.skills,
         model: deployPreset.model,
+        runtimeProvider: deployPreset.runtimeProvider,
         ...(storedSoulText ? { soulText: storedSoulText } : {}),
         ...(storedGrokApiKey ? { grokApiKey: storedGrokApiKey } : {}),
         ...(runtimePostingTopics.length > 0

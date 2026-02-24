@@ -3,6 +3,10 @@ import { createSolanaRpc, createKeyPairFromBytes, getAddressFromPublicKey } from
 import type { Address, Rpc, SolanaRpcApi } from '@solana/kit';
 import { getAgentStatePda, fetchAgentState } from '@agents-haus/sdk';
 import { getFlyClient } from '@/lib/fly-machines';
+import {
+  normalizeRuntimeProvider,
+  type RuntimeProvider,
+} from '@/lib/runtime-provider';
 
 let rpc: Rpc<SolanaRpcApi> | null = null;
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -16,6 +20,26 @@ const MAX_RUNTIME_SOUL_TEXT_LENGTH = 4_000;
 const MAX_POSTING_TOPICS = 12;
 const MAX_POSTING_TOPIC_LENGTH = 80;
 const MAX_GROK_API_KEY_LENGTH = 600;
+const MAX_RUNTIME_CONFIG_LENGTH = 4_000;
+const MAX_RUNTIME_MODEL_LENGTH = 200;
+const IRONCLAW_LLM_BACKENDS = new Set([
+  'nearai',
+  'openai',
+  'anthropic',
+  'ollama',
+  'openai_compatible',
+  'tinfoil',
+]);
+
+type IronclawRuntimeConfigResult =
+  | {
+      env: Record<string, string>;
+      error?: undefined;
+    }
+  | {
+      env?: undefined;
+      error: string;
+    };
 
 function getRpc(): Rpc<SolanaRpcApi> {
   if (!rpc) {
@@ -200,7 +224,19 @@ async function waitForAgentState(
   return null;
 }
 
-function getRuntimeImage(appName: string): string {
+function getRuntimeImage(appName: string, runtimeProvider: RuntimeProvider): string {
+  if (runtimeProvider === 'ironclaw') {
+    const ironclawImage = (process.env.FLY_IRONCLAW_RUNTIME_IMAGE || '').trim();
+    if (ironclawImage) return ironclawImage;
+    const defaultImage = (process.env.FLY_RUNTIME_IMAGE || '').trim();
+    if (defaultImage) {
+      console.warn(
+        '[deploy] FLY_IRONCLAW_RUNTIME_IMAGE is not set. Falling back to FLY_RUNTIME_IMAGE for IronClaw deploys.',
+      );
+      return defaultImage;
+    }
+  }
+
   const configured = process.env.FLY_RUNTIME_IMAGE?.trim();
   if (configured) return configured;
 
@@ -209,6 +245,158 @@ function getRuntimeImage(appName: string): string {
     `[deploy] FLY_RUNTIME_IMAGE not set, defaulting to ${fallback}. Set FLY_RUNTIME_IMAGE to pin an exact image.`,
   );
   return fallback;
+}
+
+function resolveIronclawRuntimeConfig(
+  nearAiCloudApiKey: string,
+): IronclawRuntimeConfigResult {
+  const databaseBackendRaw = normalizeRuntimeSecret(
+    process.env.FLY_IRONCLAW_DATABASE_BACKEND ||
+      process.env.IRONCLAW_DATABASE_BACKEND ||
+      'postgres',
+    32,
+  ).toLowerCase();
+  const databaseBackend =
+    databaseBackendRaw === 'libsql' ||
+    databaseBackendRaw === 'sqlite' ||
+    databaseBackendRaw === 'turso'
+      ? 'libsql'
+      : 'postgres';
+
+  const databaseUrl = normalizeRuntimeSecret(
+    process.env.FLY_IRONCLAW_DATABASE_URL ||
+      process.env.IRONCLAW_DATABASE_URL ||
+      process.env.DATABASE_URL,
+    MAX_RUNTIME_CONFIG_LENGTH,
+  );
+  const libsqlPath = normalizeRuntimeSecret(
+    process.env.FLY_IRONCLAW_LIBSQL_PATH ||
+      process.env.IRONCLAW_LIBSQL_PATH ||
+      '/data/ironclaw/ironclaw.db',
+    1_000,
+  );
+  const libsqlUrl = normalizeRuntimeSecret(
+    process.env.FLY_IRONCLAW_LIBSQL_URL || process.env.IRONCLAW_LIBSQL_URL,
+    MAX_RUNTIME_CONFIG_LENGTH,
+  );
+  const libsqlAuthToken = normalizeRuntimeSecret(
+    process.env.FLY_IRONCLAW_LIBSQL_AUTH_TOKEN ||
+      process.env.IRONCLAW_LIBSQL_AUTH_TOKEN,
+    MAX_RUNTIME_CONFIG_LENGTH,
+  );
+
+  const llmBackendRaw = normalizeRuntimeSecret(
+    process.env.FLY_IRONCLAW_LLM_BACKEND ||
+      process.env.IRONCLAW_LLM_BACKEND ||
+      'nearai',
+    64,
+  ).toLowerCase();
+  const llmBackend = IRONCLAW_LLM_BACKENDS.has(llmBackendRaw)
+    ? llmBackendRaw
+    : 'nearai';
+
+  const nearAiSessionToken = normalizeRuntimeSecret(
+    process.env.FLY_IRONCLAW_NEARAI_SESSION_TOKEN ||
+      process.env.IRONCLAW_NEARAI_SESSION_TOKEN ||
+      process.env.NEARAI_SESSION_TOKEN,
+    MAX_RUNTIME_CONFIG_LENGTH,
+  );
+  const nearAiBaseUrl =
+    normalizeRuntimeSecret(
+      process.env.FLY_IRONCLAW_NEARAI_BASE_URL ||
+        process.env.IRONCLAW_NEARAI_BASE_URL ||
+        process.env.NEARAI_BASE_URL ||
+        process.env.NEAR_AI_API_BASE_URL,
+      MAX_RUNTIME_CONFIG_LENGTH,
+    ) || 'https://cloud-api.near.ai';
+  const nearAiAuthUrl =
+    normalizeRuntimeSecret(
+      process.env.FLY_IRONCLAW_NEARAI_AUTH_URL ||
+        process.env.IRONCLAW_NEARAI_AUTH_URL ||
+        process.env.NEARAI_AUTH_URL,
+      MAX_RUNTIME_CONFIG_LENGTH,
+    ) || 'https://private.near.ai';
+  const nearAiModel = normalizeRuntimeSecret(
+    process.env.FLY_IRONCLAW_NEARAI_MODEL ||
+      process.env.IRONCLAW_NEARAI_MODEL ||
+      process.env.NEARAI_MODEL,
+    MAX_RUNTIME_MODEL_LENGTH,
+  );
+
+  if (databaseBackend === 'postgres' && !databaseUrl) {
+    return {
+      error:
+        'IronClaw deploy missing database config. Set FLY_IRONCLAW_DATABASE_URL (or IRONCLAW_DATABASE_URL).',
+    };
+  }
+
+  if (databaseBackend === 'libsql' && libsqlUrl && !libsqlAuthToken) {
+    return {
+      error:
+        'IronClaw deploy missing libSQL auth token. Set FLY_IRONCLAW_LIBSQL_AUTH_TOKEN when using FLY_IRONCLAW_LIBSQL_URL.',
+    };
+  }
+
+  if (llmBackend === 'nearai' && !nearAiCloudApiKey && !nearAiSessionToken) {
+    return {
+      error:
+        'IronClaw deploy missing NEAR AI auth. Set NEAR_AI_CLOUD_API_KEY (or FLY_IRONCLAW_NEARAI_SESSION_TOKEN).',
+    };
+  }
+
+  const env: Record<string, string> = {
+    ONBOARD_COMPLETED: 'true',
+    DATABASE_BACKEND: databaseBackend,
+    LLM_BACKEND: llmBackend,
+  };
+
+  if (databaseBackend === 'postgres') {
+    env.DATABASE_URL = databaseUrl;
+  } else {
+    env.LIBSQL_PATH = libsqlPath;
+    if (libsqlUrl) env.LIBSQL_URL = libsqlUrl;
+    if (libsqlAuthToken) env.LIBSQL_AUTH_TOKEN = libsqlAuthToken;
+  }
+
+  if (nearAiCloudApiKey) {
+    env.NEARAI_API_KEY = nearAiCloudApiKey;
+    // Backward-compatibility with older runtime wrappers.
+    env.NEAR_AI_CLOUD_API_KEY = nearAiCloudApiKey;
+  }
+  if (nearAiSessionToken) env.NEARAI_SESSION_TOKEN = nearAiSessionToken;
+  env.NEARAI_BASE_URL = nearAiBaseUrl;
+  env.NEARAI_AUTH_URL = nearAiAuthUrl;
+  env.NEAR_AI_API_BASE_URL = nearAiBaseUrl;
+  if (nearAiModel) env.NEARAI_MODEL = nearAiModel;
+
+  const openAiApiKey = normalizeRuntimeSecret(
+    process.env.OPENAI_API_KEY,
+    MAX_RUNTIME_CONFIG_LENGTH,
+  );
+  const anthropicApiKey = normalizeRuntimeSecret(
+    process.env.ANTHROPIC_API_KEY,
+    MAX_RUNTIME_CONFIG_LENGTH,
+  );
+  const compatibleBaseUrl = normalizeRuntimeSecret(
+    process.env.LLM_BASE_URL,
+    MAX_RUNTIME_CONFIG_LENGTH,
+  );
+  const compatibleApiKey = normalizeRuntimeSecret(
+    process.env.LLM_API_KEY || process.env.OPENROUTER_API_KEY,
+    MAX_RUNTIME_CONFIG_LENGTH,
+  );
+  const compatibleModel = normalizeRuntimeSecret(
+    process.env.LLM_MODEL,
+    MAX_RUNTIME_MODEL_LENGTH,
+  );
+
+  if (openAiApiKey) env.OPENAI_API_KEY = openAiApiKey;
+  if (anthropicApiKey) env.ANTHROPIC_API_KEY = anthropicApiKey;
+  if (compatibleBaseUrl) env.LLM_BASE_URL = compatibleBaseUrl;
+  if (compatibleApiKey) env.LLM_API_KEY = compatibleApiKey;
+  if (compatibleModel) env.LLM_MODEL = compatibleModel;
+
+  return { env };
 }
 
 /**
@@ -234,7 +422,7 @@ export async function POST(
     }
 
     // 2. Parse request body
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     const {
       force,
       profileId,
@@ -244,7 +432,13 @@ export async function POST(
       soulText,
       postingTopics,
       grokApiKey,
-    } = body;
+      runtimeProvider: runtimeProviderRaw,
+      runtime,
+      provider,
+    } = body as Record<string, unknown>;
+    const runtimeProvider = normalizeRuntimeProvider(
+      runtimeProviderRaw || runtime || provider,
+    );
     const sharedExecutorKeypair = getSharedExecutorKeypair();
     let runtimeExecutor: string;
     try {
@@ -337,11 +531,16 @@ export async function POST(
         : existingPostingTopics;
     if (existing) {
       if (!force) {
+        const existingRuntimeProvider = normalizeRuntimeProvider(
+          existing.config?.env?.AGENT_RUNTIME_PROVIDER ||
+            existing.config?.env?.RUNTIME_PROVIDER,
+        );
         return NextResponse.json(
           {
             error: 'Machine already exists',
             machineId: existing.id,
             state: existing.state,
+            runtimeProvider: existingRuntimeProvider,
           },
           { status: 409 },
         );
@@ -370,13 +569,28 @@ export async function POST(
 
     // 4. Create Fly Machine (trim env vars to strip trailing newlines)
     const appName = (process.env.FLY_APP_NAME || 'agents-haus-runtime').trim();
-    const image = getRuntimeImage(appName);
+    const image = getRuntimeImage(appName, runtimeProvider);
+    const nearAiCloudApiKey = normalizeRuntimeSecret(
+      process.env.NEAR_AI_CLOUD_API_KEY ||
+        process.env.NEARAI_API_KEY ||
+        process.env.NEAR_AI_API_KEY ||
+        process.env.IRONCLAW_NEAR_API_KEY,
+      MAX_RUNTIME_CONFIG_LENGTH,
+    );
+    const ironclawRuntimeConfig =
+      runtimeProvider === 'ironclaw'
+        ? resolveIronclawRuntimeConfig(nearAiCloudApiKey)
+        : null;
+    if (ironclawRuntimeConfig?.error) {
+      return NextResponse.json({ error: ironclawRuntimeConfig.error }, { status: 400 });
+    }
     const machine = await fly.createMachine({
       name: `agent-${soulMint.slice(0, 12)}`,
       image,
       env: {
         SOUL_MINT_ADDRESS: soulMint,
         EXECUTOR_KEYPAIR: sharedExecutorKeypair,
+        AGENT_RUNTIME_PROVIDER: runtimeProvider,
         SOLANA_RPC_URL:
           (process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com').trim(),
         AGENTS_HAUS_PROGRAM_ID:
@@ -401,6 +615,7 @@ export async function POST(
         ),
         RUNTIME_SCHEDULER_MODE: schedulerMode,
         RUNTIME_AUTO_RECLAIM: schedulerAutoReclaim ? 'true' : 'false',
+        ...(ironclawRuntimeConfig?.env || {}),
         PORT: '3001',
       },
     });
@@ -425,6 +640,7 @@ export async function POST(
       region: machine.region,
       name: machine.name,
       runtimeExecutor,
+      runtimeProvider,
       scheduler: {
         enabled: schedulerEnabled,
         intervalMinutes: schedulerIntervalMinutes,

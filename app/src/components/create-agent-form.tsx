@@ -11,6 +11,10 @@ import {
 } from '@agents-haus/common';
 import { useAgentTransactions } from '@/hooks/use-agent-transactions';
 import { useSendTransaction } from '@/hooks/use-send-transaction';
+import {
+  DEFAULT_RUNTIME_PROVIDER,
+  type RuntimeProvider,
+} from '@/lib/runtime-provider';
 
 type Step = 'identity' | 'topics' | 'mint';
 
@@ -53,6 +57,35 @@ const TOPIC_SUGGESTIONS = [
 const MAX_POSTING_TOPICS = 8;
 const MAX_TOPIC_LENGTH = 48;
 const MAX_GROK_API_KEY_LENGTH = 300;
+const RUNTIME_OPTIONS: Array<{
+  id: RuntimeProvider;
+  name: string;
+  description: string;
+  bullets: string[];
+}> = [
+  {
+    id: 'openclaw',
+    name: 'OpenClaw',
+    description:
+      'Current default runtime for agents.haus deployments.',
+    bullets: [
+      'Fly deployment path',
+      'Chat, files, and scheduler supported',
+      'Recommended for production',
+    ],
+  },
+  {
+    id: 'ironclaw',
+    name: 'IronClaw',
+    description:
+      'Alternative runtime profile using an IronClaw image when configured.',
+    bullets: [
+      'Select when testing IronClaw builds',
+      'Uses FLY_IRONCLAW_RUNTIME_IMAGE when set',
+      'Falls back to default runtime image if unset',
+    ],
+  },
+];
 
 async function fetchSharedExecutorAddress(): Promise<string> {
   const response = await fetch('/api/runtime/executor', {
@@ -109,6 +142,9 @@ export function CreateAgentForm() {
   const [enableGrokSkill, setEnableGrokSkill] = useState(false);
   const [grokApiKey, setGrokApiKey] = useState('');
   const [extraSkills, setExtraSkills] = useState<string[]>([]);
+  const [runtimeProvider, setRuntimeProvider] = useState<RuntimeProvider>(
+    DEFAULT_RUNTIME_PROVIDER,
+  );
   const [loadedSkillsFromQuery, setLoadedSkillsFromQuery] = useState(false);
   const [soulImageFile, setSoulImageFile] = useState<File | null>(null);
   const [soulImagePreviewUrl, setSoulImagePreviewUrl] = useState<string | null>(null);
@@ -118,10 +154,11 @@ export function CreateAgentForm() {
   const [showTutorialModal, setShowTutorialModal] = useState(false);
 
   const stepIndex = STEPS.indexOf(step);
+  const grokSkillSet = enableGrokSkill ? ['grok-writer', 'x-posting'] : [];
   const selectedSkills = Array.from(
     new Set([
       ...DEFAULT_RUNTIME_SKILLS,
-      ...(enableGrokSkill ? ['grok-writer'] : []),
+      ...grokSkillSet,
       ...extraSkills,
     ]),
   );
@@ -345,6 +382,7 @@ export function CreateAgentForm() {
         profileId: DEFAULT_PROFILE_ID,
         skills: selectedSkills,
         model: null,
+        runtimeProvider,
       };
       localStorage.setItem(`agent-deploy-preset:${soulAssetAddress}`, JSON.stringify(deployPreset));
       localStorage.setItem(`agent-name:${soulAssetAddress}`, name.trim());
@@ -369,6 +407,7 @@ export function CreateAgentForm() {
               profileId: DEFAULT_PROFILE_ID,
               skills: selectedSkills,
               model: null,
+              runtimeProvider,
               soulText: bio.trim(),
               ...(enableGrokSkill && grokApiKey.trim()
                 ? { grokApiKey: grokApiKey.trim() }
@@ -503,6 +542,52 @@ export function CreateAgentForm() {
           </div>
           <div>
             <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
+              <div className="mb-2 text-xs text-ink-muted">Runtime deployment option</div>
+              <div className="grid gap-2.5 sm:grid-cols-2">
+                {RUNTIME_OPTIONS.map((option) => {
+                  const selected = runtimeProvider === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => {
+                        setRuntimeProvider(option.id);
+                        setError(null);
+                      }}
+                      className={`rounded-xl border px-3 py-3 text-left transition-colors ${
+                        selected
+                          ? 'border-ink bg-ink text-surface'
+                          : 'border-border bg-surface-raised text-ink hover:bg-surface-overlay'
+                      }`}
+                    >
+                      <div className="text-sm font-semibold">{option.name}</div>
+                      <div
+                        className={`mt-1 text-xs ${
+                          selected ? 'text-surface/85' : 'text-ink-secondary'
+                        }`}
+                      >
+                        {option.description}
+                      </div>
+                      <div className="mt-2 space-y-1">
+                        {option.bullets.map((bullet) => (
+                          <div
+                            key={bullet}
+                            className={`text-[11px] ${
+                              selected ? 'text-surface/80' : 'text-ink-muted'
+                            }`}
+                          >
+                            {bullet}
+                          </div>
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          <div>
+            <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
               <div className="text-xs text-ink-muted mb-1">Runtime defaults</div>
               <div className="text-sm text-ink-secondary">
                 New agents start with default runtime behavior. Strategy can be directed in chat instead of being baked into this form.
@@ -527,7 +612,7 @@ export function CreateAgentForm() {
                 className="mt-0.5 h-4 w-4 rounded border-border text-brand-500 focus:ring-brand-500"
               />
               <span className="text-sm text-ink-secondary">
-                Enable Grok Writer skill for X-style writing.
+                Enable Grok Writer skill for X-style writing and X data retrieval.
               </span>
             </label>
             <a
@@ -668,6 +753,12 @@ export function CreateAgentForm() {
           <div className="flex justify-between text-sm">
             <span className="text-ink-muted">On-chain strategy</span>
             <span className="font-medium text-ink">Balanced (default)</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-ink-muted">Runtime</span>
+            <span className="font-medium text-ink">
+              {runtimeProvider === 'ironclaw' ? 'IronClaw' : 'OpenClaw'}
+            </span>
           </div>
           <div className="space-y-2">
             <div className="text-sm text-ink-muted">Bio</div>
