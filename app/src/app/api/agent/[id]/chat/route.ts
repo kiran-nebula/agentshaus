@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { getFlyClient } from '@/lib/fly-machines';
+import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
 
 type CronChatCommand =
   | { action: 'list' }
@@ -1132,22 +1133,58 @@ export async function POST(
     // Build messages array for OpenClaw chat completions endpoint
     const messages = [...(history || []), { role: 'user', content: message }];
 
+    const runtimeProvider = normalizeRuntimeProvider(
+      machine.config?.env?.AGENT_RUNTIME_PROVIDER ||
+        machine.config?.env?.RUNTIME_PROVIDER,
+    );
+    const runtimeHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'fly-force-instance-id': machine.id,
+    };
+    if (runtimeProvider === 'ironclaw') {
+      const gatewayAuthToken = (
+        process.env.FLY_IRONCLAW_GATEWAY_AUTH_TOKEN ||
+        process.env.IRONCLAW_GATEWAY_AUTH_TOKEN ||
+        process.env.GATEWAY_AUTH_TOKEN ||
+        machine.config?.env?.GATEWAY_AUTH_TOKEN ||
+        ''
+      ).trim();
+      if (!gatewayAuthToken) {
+        return NextResponse.json(
+          { error: 'IronClaw runtime missing gateway auth token. Redeploy runtime.' },
+          { status: 502 },
+        );
+      }
+      runtimeHeaders.Authorization = `Bearer ${gatewayAuthToken}`;
+    }
+
     // Route to the specific machine via Fly's Anycast proxy + fly-force-instance-id header.
     // The machine's services config exposes internal_port 3001 on external port 443.
     const appName = (process.env.FLY_APP_NAME || 'agents-haus-runtime').trim();
     const chatUrl = `https://${appName}.fly.dev/v1/chat/completions`;
+    const requestBody: Record<string, unknown> = {
+      messages,
+      stream: false,
+    };
+    if (runtimeProvider === 'ironclaw') {
+      const ironclawModel =
+        requestedModel !== 'default'
+          ? requestedModel
+          : (
+              machine.config?.env?.NEARAI_MODEL ||
+              process.env.FLY_IRONCLAW_NEARAI_MODEL ||
+              process.env.NEARAI_MODEL ||
+              'zai-org/GLM-latest'
+            ).trim();
+      requestBody.model = ironclawModel;
+    } else {
+      requestBody.model = requestedModel;
+    }
 
     const chatResponse = await fetch(chatUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'fly-force-instance-id': machine.id,
-      },
-      body: JSON.stringify({
-        messages,
-        model: requestedModel,
-        stream: false,
-      }),
+      headers: runtimeHeaders,
+      body: JSON.stringify(requestBody),
     });
 
     if (!chatResponse.ok) {

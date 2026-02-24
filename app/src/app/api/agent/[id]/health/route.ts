@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFlyClient } from '@/lib/fly-machines';
+import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
 
 /**
  * GET /api/agent/[id]/health
@@ -44,8 +45,13 @@ export async function GET(
       );
     }
 
+    const runtimeProvider = normalizeRuntimeProvider(
+      machine.config?.env?.AGENT_RUNTIME_PROVIDER ||
+        machine.config?.env?.RUNTIME_PROVIDER,
+    );
     const appName = (process.env.FLY_APP_NAME || 'agents-haus-runtime').trim();
-    const healthUrl = `https://${appName}.fly.dev/health`;
+    const healthPath = runtimeProvider === 'ironclaw' ? '/api/health' : '/health';
+    const healthUrl = `https://${appName}.fly.dev${healthPath}`;
 
     const runtimeResponse = await fetch(healthUrl, {
       method: 'GET',
@@ -93,4 +99,3 @@ export async function GET(
     );
   }
 }
-

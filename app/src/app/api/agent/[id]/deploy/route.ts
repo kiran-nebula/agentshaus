@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { randomBytes } from 'node:crypto';
 import { createSolanaRpc, createKeyPairFromBytes, getAddressFromPublicKey } from '@solana/kit';
 import type { Address, Rpc, SolanaRpcApi } from '@solana/kit';
 import { getAgentStatePda, fetchAgentState } from '@agents-haus/sdk';
@@ -22,6 +23,8 @@ const MAX_POSTING_TOPIC_LENGTH = 80;
 const MAX_GROK_API_KEY_LENGTH = 600;
 const MAX_RUNTIME_CONFIG_LENGTH = 4_000;
 const MAX_RUNTIME_MODEL_LENGTH = 200;
+const MAX_RUNTIME_HOST_LENGTH = 200;
+const MAX_GATEWAY_AUTH_TOKEN_LENGTH = 600;
 const IRONCLAW_LLM_BACKENDS = new Set([
   'nearai',
   'openai',
@@ -272,7 +275,7 @@ function resolveIronclawRuntimeConfig(
   const libsqlPath = normalizeRuntimeSecret(
     process.env.FLY_IRONCLAW_LIBSQL_PATH ||
       process.env.IRONCLAW_LIBSQL_PATH ||
-      '/data/ironclaw/ironclaw.db',
+      '/home/ironclaw/.ironclaw/ironclaw.db',
     1_000,
   );
   const libsqlUrl = normalizeRuntimeSecret(
@@ -322,6 +325,26 @@ function resolveIronclawRuntimeConfig(
       process.env.NEARAI_MODEL,
     MAX_RUNTIME_MODEL_LENGTH,
   );
+  const gatewayHost =
+    normalizeRuntimeSecret(
+      process.env.FLY_IRONCLAW_GATEWAY_HOST || process.env.IRONCLAW_GATEWAY_HOST,
+      MAX_RUNTIME_HOST_LENGTH,
+    ) || '0.0.0.0';
+  const gatewayPort =
+    parseIntInRange(
+      process.env.FLY_IRONCLAW_GATEWAY_PORT || process.env.IRONCLAW_GATEWAY_PORT,
+      1,
+      65535,
+    ) || 3001;
+  const configuredGatewayAuthToken = normalizeRuntimeSecret(
+    process.env.FLY_IRONCLAW_GATEWAY_AUTH_TOKEN ||
+      process.env.IRONCLAW_GATEWAY_AUTH_TOKEN ||
+      process.env.GATEWAY_AUTH_TOKEN,
+    MAX_GATEWAY_AUTH_TOKEN_LENGTH,
+  );
+  const gatewayAuthToken =
+    configuredGatewayAuthToken ||
+    `agt_${randomBytes(24).toString('base64url').slice(0, 40)}`;
 
   if (databaseBackend === 'postgres' && !databaseUrl) {
     return {
@@ -346,8 +369,13 @@ function resolveIronclawRuntimeConfig(
 
   const env: Record<string, string> = {
     ONBOARD_COMPLETED: 'true',
+    CLI_ENABLED: 'false',
     DATABASE_BACKEND: databaseBackend,
     LLM_BACKEND: llmBackend,
+    GATEWAY_ENABLED: 'true',
+    GATEWAY_HOST: gatewayHost,
+    GATEWAY_PORT: String(gatewayPort),
+    GATEWAY_AUTH_TOKEN: gatewayAuthToken,
   };
 
   if (databaseBackend === 'postgres') {
