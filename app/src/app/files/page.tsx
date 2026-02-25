@@ -8,7 +8,7 @@ import { fetchAgentsByOwners } from '@agents-haus/sdk';
 import { STRATEGY_LABELS, truncateAddress, type Strategy } from '@agents-haus/common';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
 
-type FileRootKey = 'user' | 'workspace' | 'runtime' | 'tmp';
+type FileRootKey = 'user' | 'workspace';
 
 type RootDescriptor = {
   key: FileRootKey;
@@ -49,8 +49,6 @@ function defaultMachineState(): AgentMachineState {
 const DEFAULT_ROOTS: RootDescriptor[] = [
   { key: 'user', label: 'Custom Files', rootPath: 'workspace/user-files' },
   { key: 'workspace', label: 'Workspace', rootPath: 'workspace' },
-  { key: 'runtime', label: 'Runtime', rootPath: '.' },
-  { key: 'tmp', label: 'Tmp', rootPath: '/tmp' },
 ];
 
 function formatFilesApiError(payload: unknown, fallback: string): string {
@@ -508,10 +506,7 @@ export default function FilesPage() {
           }))
           .filter(
             (root: any): root is RootDescriptor =>
-              (root.key === 'user' ||
-                root.key === 'workspace' ||
-                root.key === 'runtime' ||
-                root.key === 'tmp') &&
+              (root.key === 'user' || root.key === 'workspace') &&
               typeof root.label === 'string' &&
               typeof root.rootPath === 'string',
           );

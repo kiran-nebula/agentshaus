@@ -1,10 +1,129 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFlyClient, type FlyMachine } from '@/lib/fly-machines';
 
+type FileRootKey = 'user' | 'workspace';
+type RuntimeTreeNode = {
+  type?: unknown;
+  name?: unknown;
+  path?: unknown;
+  childCount?: unknown;
+  children?: unknown;
+  [key: string]: unknown;
+};
+
 const RUNTIME_PROXY_TIMEOUT_MS = Number.parseInt(
   process.env.RUNTIME_PROXY_TIMEOUT_MS || '12000',
   10,
 );
+const ALLOWED_FILE_ROOTS = new Set<FileRootKey>(['user', 'workspace']);
+const SENSITIVE_PATH_SEGMENTS = new Set([
+  '.git',
+  '.ssh',
+  '.aws',
+  '.gnupg',
+  '.secrets',
+]);
+const SENSITIVE_FILE_PATTERNS: RegExp[] = [
+  /^\.env($|\.)/i,
+  /\.pem$/i,
+  /\.key$/i,
+  /^id_rsa$/i,
+  /^id_ed25519$/i,
+  /^authorized_keys$/i,
+  /^known_hosts$/i,
+];
+
+function isSensitiveToken(value: string): boolean {
+  const token = value.trim().toLowerCase();
+  if (!token) return false;
+  return SENSITIVE_FILE_PATTERNS.some((pattern) => pattern.test(token));
+}
+
+function looksSensitivePath(value: string): boolean {
+  const normalized = value
+    .replace(/\\/g, '/')
+    .replace(/\/{2,}/g, '/')
+    .trim();
+  if (!normalized) return false;
+
+  const segments = normalized.split('/').filter(Boolean);
+  for (const segment of segments) {
+    const lower = segment.toLowerCase();
+    if (SENSITIVE_PATH_SEGMENTS.has(lower) || isSensitiveToken(lower)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function sanitizeTreeNode(node: unknown): RuntimeTreeNode | null {
+  if (!node || typeof node !== 'object') return null;
+  const source = node as RuntimeTreeNode;
+  const nodeName = typeof source.name === 'string' ? source.name : '';
+  const nodePath =
+    typeof source.path === 'string' && source.path.trim()
+      ? source.path
+      : nodeName;
+
+  if (looksSensitivePath(nodeName) || looksSensitivePath(nodePath)) {
+    return null;
+  }
+
+  const next: RuntimeTreeNode = { ...source };
+  if (Array.isArray(source.children)) {
+    const sanitizedChildren = source.children
+      .map((child) => sanitizeTreeNode(child))
+      .filter((child): child is RuntimeTreeNode => Boolean(child));
+    next.children = sanitizedChildren;
+    if (source.type === 'directory') {
+      next.childCount = sanitizedChildren.length;
+    }
+  }
+
+  return next;
+}
+
+function sanitizeTreePayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object') return payload;
+  const source = payload as Record<string, unknown>;
+  const next: Record<string, unknown> = { ...source };
+
+  if (Array.isArray(source.roots)) {
+    next.roots = source.roots
+      .filter((root) => {
+        if (!root || typeof root !== 'object') return false;
+        const key = (root as { key?: unknown }).key;
+        return typeof key === 'string' && ALLOWED_FILE_ROOTS.has(key as FileRootKey);
+      })
+      .map((root) => {
+        const entry = root as {
+          key?: unknown;
+          label?: unknown;
+          rootPath?: unknown;
+        };
+        return {
+          key: String(entry.key),
+          label: typeof entry.label === 'string' ? entry.label : String(entry.key),
+          rootPath:
+            typeof entry.rootPath === 'string' ? entry.rootPath : '',
+        };
+      });
+  }
+
+  if ('tree' in source) {
+    next.tree = sanitizeTreeNode(source.tree);
+  }
+
+  if (
+    typeof source.requestedPath === 'string' &&
+    looksSensitivePath(source.requestedPath)
+  ) {
+    next.requestedPath = '.';
+  }
+
+  return next;
+}
 
 function getRuntimeBaseUrl(): string {
   const appName = (process.env.FLY_APP_NAME || 'agents-haus-runtime').trim();
@@ -76,11 +195,28 @@ export async function GET(
     if (machine instanceof NextResponse) return machine;
 
     const search = new URLSearchParams();
-    const root = request.nextUrl.searchParams.get('root');
+    const rootParam = (
+      request.nextUrl.searchParams.get('root') || 'user'
+    ).trim().toLowerCase();
+    if (!ALLOWED_FILE_ROOTS.has(rootParam as FileRootKey)) {
+      return NextResponse.json(
+        { error: 'Requested root is restricted' },
+        { status: 403 },
+      );
+    }
+    const root = rootParam as FileRootKey;
     const path = request.nextUrl.searchParams.get('path');
     const depth = request.nextUrl.searchParams.get('depth');
-    if (root) search.set('root', root);
-    if (path) search.set('path', path);
+    search.set('root', root);
+    if (path) {
+      if (looksSensitivePath(path)) {
+        return NextResponse.json(
+          { error: 'Access to sensitive paths is blocked' },
+          { status: 403 },
+        );
+      }
+      search.set('path', path);
+    }
     if (depth) search.set('depth', depth);
 
     const runtimeResponse = await fetchRuntimeWithTimeout(
@@ -93,7 +229,18 @@ export async function GET(
       },
     );
 
-    return forwardRuntimeJson(runtimeResponse);
+    const payload = await runtimeResponse.json().catch(async () => {
+      const text = await runtimeResponse.text().catch(() => null);
+      return { error: text || 'Invalid runtime response' };
+    });
+
+    if (!runtimeResponse.ok) {
+      return NextResponse.json(payload, { status: runtimeResponse.status });
+    }
+
+    return NextResponse.json(sanitizeTreePayload(payload), {
+      status: runtimeResponse.status,
+    });
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       return NextResponse.json(
@@ -134,7 +281,19 @@ export async function POST(
     const outbound = new FormData();
     outbound.set('file', file);
     const requestedPath = incoming.get('path');
+    if (isSensitiveToken(file.name)) {
+      return NextResponse.json(
+        { error: 'Uploading sensitive filenames is blocked' },
+        { status: 400 },
+      );
+    }
     if (typeof requestedPath === 'string' && requestedPath.trim()) {
+      if (looksSensitivePath(requestedPath.trim())) {
+        return NextResponse.json(
+          { error: 'Uploading to sensitive paths is blocked' },
+          { status: 400 },
+        );
+      }
       outbound.set('path', requestedPath.trim());
     }
 
