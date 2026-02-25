@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { DEFAULT_LLM_MODELS } from '@agents-haus/common';
 import { getFlyClient } from '@/lib/fly-machines';
 import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
 
@@ -22,6 +23,9 @@ const POSTING_TOPICS_CSV_ENV_KEY = 'AGENT_POSTING_TOPICS';
 const MAX_AUTO_RECLAIM_MEMO_LENGTH = 560;
 const MAX_POSTING_TOPICS = 12;
 const MAX_POSTING_TOPIC_LENGTH = 80;
+const OPENROUTER_DEFAULT_MODEL_IDS = new Set(
+  DEFAULT_LLM_MODELS.map((model) => model.id),
+);
 
 type RuntimeAutoReclaimContentCommand =
   | { action: 'show' }
@@ -1166,34 +1170,77 @@ export async function POST(
       messages,
       stream: false,
     };
+    const ironclawLlmBackend =
+      runtimeProvider === 'ironclaw'
+        ? (machine.config?.env?.LLM_BACKEND || '').trim().toLowerCase()
+        : '';
+    let ironclawDefaultModel: string | null = null;
+    let ironclawActiveModel: string | null = null;
     if (runtimeProvider === 'ironclaw') {
-      const ironclawModel =
-        requestedModel !== 'default'
-          ? requestedModel
-          : (
-              machine.config?.env?.NEARAI_MODEL ||
-              process.env.FLY_IRONCLAW_NEARAI_MODEL ||
-              process.env.NEARAI_MODEL ||
-              'zai-org/GLM-latest'
-            ).trim();
-      requestBody.model = ironclawModel;
+      if (ironclawLlmBackend === 'nearai' || !ironclawLlmBackend) {
+        ironclawDefaultModel = (
+          machine.config?.env?.NEARAI_MODEL ||
+          process.env.FLY_IRONCLAW_NEARAI_MODEL ||
+          process.env.NEARAI_MODEL ||
+          'zai-org/GLM-latest'
+        ).trim();
+        const shouldUseDefaultModel =
+          requestedModel === 'default' ||
+          OPENROUTER_DEFAULT_MODEL_IDS.has(requestedModel);
+        ironclawActiveModel = shouldUseDefaultModel
+          ? ironclawDefaultModel
+          : requestedModel;
+        requestBody.model = ironclawActiveModel;
+      } else {
+        // Non-NEAR backends select model from runtime config and may ignore per-request overrides.
+        ironclawActiveModel = (machine.config?.env?.LLM_MODEL || process.env.LLM_MODEL || '').trim() || null;
+        requestBody.model = ironclawActiveModel || requestedModel;
+      }
     } else {
       requestBody.model = requestedModel;
     }
 
-    const chatResponse = await fetch(chatUrl, {
-      method: 'POST',
-      headers: runtimeHeaders,
-      body: JSON.stringify(requestBody),
-    });
+    const sendChatRequest = () =>
+      fetch(chatUrl, {
+        method: 'POST',
+        headers: runtimeHeaders,
+        body: JSON.stringify(requestBody),
+      });
+    let chatResponse = await sendChatRequest();
 
     if (!chatResponse.ok) {
-      const errText = await chatResponse.text();
-      console.error('OpenClaw chat error:', chatResponse.status, errText);
-      return NextResponse.json(
-        { error: 'Failed to reach agent runtime', details: errText },
-        { status: 502 },
-      );
+      let errText = await chatResponse.text();
+      const modelNotFound =
+        runtimeProvider === 'ironclaw' &&
+        (ironclawLlmBackend === 'nearai' || !ironclawLlmBackend) &&
+        /model\\s+'[^']+'\\s+not found/i.test(errText);
+
+      // Some UI presets are OpenRouter-only; retry once with IronClaw's runtime model.
+      if (
+        modelNotFound &&
+        ironclawDefaultModel &&
+        requestBody.model !== ironclawDefaultModel
+      ) {
+        requestBody.model = ironclawDefaultModel;
+        ironclawActiveModel = ironclawDefaultModel;
+        chatResponse = await sendChatRequest();
+        if (!chatResponse.ok) {
+          errText = await chatResponse.text();
+        }
+      }
+
+      if (!chatResponse.ok) {
+        console.error('OpenClaw chat error:', chatResponse.status, errText);
+        const errorMessage =
+          runtimeProvider === 'ironclaw' &&
+          /model\\s+'[^']+'\\s+not found/i.test(errText)
+            ? 'Selected model is unavailable on IronClaw runtime.'
+            : 'Failed to reach agent runtime';
+        return NextResponse.json(
+          { error: errorMessage, details: errText },
+          { status: 502 },
+        );
+      }
     }
 
     const data = await chatResponse.json();
@@ -1202,7 +1249,9 @@ export async function POST(
     const responseModel =
       typeof data.model === 'string' && data.model.trim()
         ? data.model.trim()
-        : requestedModel;
+        : typeof requestBody.model === 'string' && requestBody.model.trim()
+          ? requestBody.model.trim()
+          : ironclawActiveModel || requestedModel;
 
     return NextResponse.json({ response: assistantMessage, model: responseModel });
   } catch (err) {
