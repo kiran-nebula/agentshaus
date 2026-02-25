@@ -530,7 +530,7 @@ export function CreateAgentForm() {
                       <img
                         src={option.imageSrc}
                         alt={`${option.name} logo`}
-                        className="h-full w-full object-cover"
+                        className="h-full w-full object-contain object-center"
                       />
                     </div>
                     <div className="mt-4 flex items-center gap-2">
