@@ -60,29 +60,35 @@ const MAX_GROK_API_KEY_LENGTH = 300;
 const RUNTIME_OPTIONS: Array<{
   id: RuntimeProvider;
   name: string;
+  imageSrc: string;
+  badge?: string;
   description: string;
   bullets: string[];
 }> = [
   {
     id: 'openclaw',
     name: 'OpenClaw',
+    imageSrc: '/agent-runtimes/openclaw.png',
     description:
-      'Current default runtime for agents.haus deployments.',
+      'Fast, lightweight AI assistant for everyday tasks and productivity.',
     bullets: [
-      'Fly deployment path',
-      'Chat, files, and scheduler supported',
-      'Recommended for production',
+      'Open source community',
+      'Persistent execution',
+      'Tool-integrated OS',
     ],
   },
   {
     id: 'ironclaw',
     name: 'IronClaw',
+    imageSrc: '/agent-runtimes/ironclaw.png',
+    badge: 'Alpha',
     description:
-      'Alternative runtime profile using an IronClaw image when configured.',
+      'Powerful agent designed to work with sensitive data and personal credentials.',
     bullets: [
-      'Select when testing IronClaw builds',
-      'Uses FLY_IRONCLAW_RUNTIME_IMAGE when set',
-      'Falls back to default runtime image if unset',
+      'Lightweight runtime',
+      'Structured tasks',
+      'Session-based runs',
+      'API-driven framework',
     ],
   },
 ];
@@ -488,8 +494,76 @@ export function CreateAgentForm() {
       {/* Step: Identity */}
       {step === 'identity' && (
         <div className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-ink mb-2">Agent Name</label>
+          <div className="rounded-2xl border border-border-light bg-[#131724] px-4 py-4 sm:px-5 sm:py-5">
+            <div className="mb-4 flex items-center gap-2">
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white text-sm font-semibold text-[#131724]">
+                1
+              </span>
+              <h3 className="text-xl font-semibold text-white">Choose Your Agent</h3>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {RUNTIME_OPTIONS.map((option) => {
+                const selected = runtimeProvider === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => {
+                      setRuntimeProvider(option.id);
+                      setError(null);
+                    }}
+                    className={`relative rounded-2xl border px-5 py-5 text-left transition-colors ${
+                      selected
+                        ? 'border-white bg-[#222737]'
+                        : 'border-white/25 bg-[#1a1f2e] hover:border-white/45'
+                    }`}
+                  >
+                    {selected && (
+                      <span className="absolute right-4 top-4 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-[#111827]">
+                        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-current">
+                          <path d="M6.5 11.3 3 7.8l1.1-1.1 2.4 2.4 5.4-5.4L13 4.8z" />
+                        </svg>
+                      </span>
+                    )}
+                    <div className="h-12 w-12 overflow-hidden rounded-sm border border-white/15 bg-black/30">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={option.imageSrc}
+                        alt={`${option.name} logo`}
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                    <div className="mt-4 flex items-center gap-2">
+                      <div className="text-4xl font-semibold text-white">{option.name}</div>
+                      {option.badge && (
+                        <span className="rounded-md bg-white/12 px-2 py-0.5 text-xs font-medium text-white/85">
+                          {option.badge}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-2 text-sm text-white/75">{option.description}</p>
+                    <div className="mt-4 space-y-1.5">
+                      {option.bullets.map((bullet) => (
+                        <div key={bullet} className="flex items-center gap-2 text-sm text-white/80">
+                          <span className="text-white/70">+</span>
+                          <span>{bullet}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border-light bg-surface px-4 py-4">
+            <div className="mb-3 flex items-center gap-2">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-ink text-xs font-semibold text-surface">
+                2
+              </span>
+              <h3 className="text-lg font-semibold text-ink">Name</h3>
+            </div>
+            <label className="mb-2 block text-sm font-medium text-ink">Agent Name</label>
             <input
               type="text"
               value={name}
@@ -498,97 +572,63 @@ export function CreateAgentForm() {
               className="w-full rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none transition-colors"
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-ink mb-2">Personality / Bio</label>
-            <textarea
-              value={bio}
-              onChange={(e) => setBio(e.target.value)}
-              placeholder="Describe your agent's personality, voice, and posting style..."
-              rows={5}
-              className="w-full rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none resize-none transition-colors"
-            />
-            <p className="text-xs text-ink-muted mt-1.5">This becomes the agent&apos;s SOUL.md identity file.</p>
-          </div>
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <label className="block text-sm font-medium text-ink">Soul NFT Image (optional)</label>
-              {soulImageFile && (
-                <button
-                  type="button"
-                  onClick={() => handleSoulImageSelection(null)}
-                  className="text-xs text-ink-muted underline-offset-2 hover:underline"
-                >
-                  Remove
-                </button>
+
+          <div className="space-y-5 rounded-xl border border-border-light bg-surface px-4 py-4">
+            <div className="mb-1 flex items-center gap-2">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-ink text-xs font-semibold text-surface">
+                3
+              </span>
+              <h3 className="text-lg font-semibold text-ink">The other bits</h3>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-ink">Personality / Bio</label>
+              <textarea
+                value={bio}
+                onChange={(e) => setBio(e.target.value)}
+                placeholder="Describe your agent's personality, voice, and posting style..."
+                rows={5}
+                className="w-full rounded-xl border border-border bg-surface-raised px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none resize-none transition-colors"
+              />
+              <p className="mt-1.5 text-xs text-ink-muted">
+                This becomes the agent&apos;s SOUL.md identity file.
+              </p>
+            </div>
+
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <label className="block text-sm font-medium text-ink">Soul NFT Image (optional)</label>
+                {soulImageFile && (
+                  <button
+                    type="button"
+                    onClick={() => handleSoulImageSelection(null)}
+                    className="text-xs text-ink-muted underline-offset-2 hover:underline"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={(e) => handleSoulImageSelection(e.target.files?.[0] ?? null)}
+                className="w-full rounded-xl border border-border bg-surface-raised px-4 py-2.5 text-sm text-ink file:mr-3 file:rounded-full file:border-0 file:bg-ink file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-surface"
+              />
+              <p className="mt-1.5 text-xs text-ink-muted">
+                PNG, JPG, GIF, or WebP up to 5MB. Uploaded before mint and included in NFT metadata.
+              </p>
+              {soulImagePreviewUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={soulImagePreviewUrl}
+                  alt="Soul NFT preview"
+                  className="mt-3 h-40 w-40 rounded-xl border border-border-light object-cover"
+                />
               )}
             </div>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif"
-              onChange={(e) => handleSoulImageSelection(e.target.files?.[0] ?? null)}
-              className="w-full rounded-xl border border-border bg-surface-raised px-4 py-2.5 text-sm text-ink file:mr-3 file:rounded-full file:border-0 file:bg-ink file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-surface"
-            />
-            <p className="mt-1.5 text-xs text-ink-muted">
-              PNG, JPG, GIF, or WebP up to 5MB. Uploaded before mint and included in NFT metadata.
-            </p>
-            {soulImagePreviewUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={soulImagePreviewUrl}
-                alt="Soul NFT preview"
-                className="mt-3 h-40 w-40 rounded-xl border border-border-light object-cover"
-              />
-            )}
-          </div>
-          <div>
-            <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
-              <div className="mb-2 text-xs text-ink-muted">Runtime deployment option</div>
-              <div className="grid gap-2.5 sm:grid-cols-2">
-                {RUNTIME_OPTIONS.map((option) => {
-                  const selected = runtimeProvider === option.id;
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => {
-                        setRuntimeProvider(option.id);
-                        setError(null);
-                      }}
-                      className={`rounded-xl border px-3 py-3 text-left transition-colors ${
-                        selected
-                          ? 'border-ink bg-ink text-surface'
-                          : 'border-border bg-surface-raised text-ink hover:bg-surface-overlay'
-                      }`}
-                    >
-                      <div className="text-sm font-semibold">{option.name}</div>
-                      <div
-                        className={`mt-1 text-xs ${
-                          selected ? 'text-surface/85' : 'text-ink-secondary'
-                        }`}
-                      >
-                        {option.description}
-                      </div>
-                      <div className="mt-2 space-y-1">
-                        {option.bullets.map((bullet) => (
-                          <div
-                            key={bullet}
-                            className={`text-[11px] ${
-                              selected ? 'text-surface/80' : 'text-ink-muted'
-                            }`}
-                          >
-                            {bullet}
-                          </div>
-                        ))}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-          <div>
-            <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
-              <div className="text-xs text-ink-muted mb-1">Runtime defaults</div>
+
+            <div className="rounded-xl border border-border-light bg-surface-raised px-4 py-3">
+              <div className="mb-1 text-xs text-ink-muted">Runtime defaults</div>
               <div className="text-sm text-ink-secondary">
                 New agents start with default runtime behavior. Strategy can be directed in chat instead of being baked into this form.
               </div>
@@ -596,69 +636,71 @@ export function CreateAgentForm() {
                 Default on-chain strategy: Balanced
               </div>
             </div>
-          </div>
-          <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
-            <label className="flex items-start gap-3">
-              <input
-                type="checkbox"
-                checked={enableGrokSkill}
-                onChange={(e) => {
-                  setEnableGrokSkill(e.target.checked);
-                  if (!e.target.checked) {
-                    setGrokApiKey('');
-                    setError(null);
-                  }
-                }}
-                className="mt-0.5 h-4 w-4 rounded border-border text-brand-500 focus:ring-brand-500"
-              />
-              <span className="text-sm text-ink-secondary">
-                Enable Grok Writer skill for X-style writing and X data retrieval.
-              </span>
-            </label>
-            <a
-              href="https://clawhub.ai/castanley/grok"
-              target="_blank"
-              rel="noreferrer"
-              className="mt-2 inline-block text-xs text-brand-500 underline-offset-2 hover:underline"
-            >
-              View Grok skill
-            </a>
-            {enableGrokSkill && (
-              <div className="mt-3">
-                <label className="mb-1.5 block text-xs font-medium text-ink-muted">
-                  Grok API Key
-                </label>
+
+            <div className="rounded-xl border border-border-light bg-surface-raised px-4 py-3">
+              <label className="flex items-start gap-3">
                 <input
-                  type="password"
-                  value={grokApiKey}
-                  onChange={(e) =>
-                    setGrokApiKey(e.target.value.slice(0, MAX_GROK_API_KEY_LENGTH))
-                  }
-                  placeholder="xai-..."
-                  autoComplete="off"
-                  className="w-full rounded-xl border border-border bg-surface-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none"
+                  type="checkbox"
+                  checked={enableGrokSkill}
+                  onChange={(e) => {
+                    setEnableGrokSkill(e.target.checked);
+                    if (!e.target.checked) {
+                      setGrokApiKey('');
+                      setError(null);
+                    }
+                  }}
+                  className="mt-0.5 h-4 w-4 rounded border-border text-brand-500 focus:ring-brand-500"
                 />
-                <p className="mt-1.5 text-xs text-ink-muted">
-                  Stored for this agent and injected into runtime as `GROK_API_KEY`.
-                </p>
+                <span className="text-sm text-ink-secondary">
+                  Enable Grok Writer skill for X-style writing and X data retrieval.
+                </span>
+              </label>
+              <a
+                href="https://clawhub.ai/castanley/grok"
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 inline-block text-xs text-brand-500 underline-offset-2 hover:underline"
+              >
+                View Grok skill
+              </a>
+              {enableGrokSkill && (
+                <div className="mt-3">
+                  <label className="mb-1.5 block text-xs font-medium text-ink-muted">
+                    Grok API Key
+                  </label>
+                  <input
+                    type="password"
+                    value={grokApiKey}
+                    onChange={(e) =>
+                      setGrokApiKey(e.target.value.slice(0, MAX_GROK_API_KEY_LENGTH))
+                    }
+                    placeholder="xai-..."
+                    autoComplete="off"
+                    className="w-full rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none"
+                  />
+                  <p className="mt-1.5 text-xs text-ink-muted">
+                    Stored for this agent and injected into runtime as `GROK_API_KEY`.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {selectedSkills.length > 0 && (
+              <div className="rounded-xl border border-border-light bg-surface-raised px-4 py-3">
+                <div className="mb-1 text-xs text-ink-muted">Enabled runtime skills</div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {selectedSkills.map((skillId) => (
+                    <span
+                      key={skillId}
+                      className="rounded-full bg-surface px-2 py-1 text-[11px] text-ink-muted"
+                    >
+                      {getAgentSkillLabel(skillId)}
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
           </div>
-          {selectedSkills.length > 0 && (
-            <div className="rounded-xl border border-border-light bg-surface px-4 py-3">
-              <div className="text-xs text-ink-muted mb-1">Enabled runtime skills</div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {selectedSkills.map((skillId) => (
-                  <span
-                    key={skillId}
-                    className="rounded-full bg-surface-raised px-2 py-1 text-[11px] text-ink-muted"
-                  >
-                    {getAgentSkillLabel(skillId)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
