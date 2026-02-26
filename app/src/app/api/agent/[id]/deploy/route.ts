@@ -613,6 +613,12 @@ export async function POST(
       requestedGrokApiKey ||
       existingGrokApiKey ||
       normalizeRuntimeSecret(process.env.GROK_API_KEY);
+
+    // Auto-enable grok-writer skill when a Grok API key is available
+    if (runtimeGrokApiKey && !normalizedSkills.includes('grok-writer')) {
+      normalizedSkills.push('grok-writer');
+    }
+
     const existingPostingTopics = parsePostingTopicsFromEnv(
       existing?.config?.env?.AGENT_POSTING_TOPICS_JSON ||
         existing?.config?.env?.AGENT_POSTING_TOPICS,
