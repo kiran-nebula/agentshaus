@@ -321,6 +321,55 @@ async function readUserFileForTool(args: { path?: string; maxBytes?: number }) {
   };
 }
 
+const MAX_TEXT_WRITE_BYTES = Number.parseInt(
+  process.env.AGENT_MAX_TEXT_WRITE_BYTES || `${256 * 1024}`,
+  10,
+);
+
+async function writeUserFileForTool(args: {
+  path?: string;
+  content?: string;
+  append?: boolean;
+}) {
+  if (!args.path || typeof args.path !== 'string' || !args.path.trim()) {
+    throw new Error('path is required');
+  }
+  if (typeof args.content !== 'string') {
+    throw new Error('content is required and must be a string');
+  }
+
+  await ensureUserFilesRoot();
+
+  const resolved = resolvePathWithinRoot('user', args.path);
+
+  // Ensure parent directory exists
+  const parentDir = path.dirname(resolved.absolutePath);
+  await mkdir(parentDir, { recursive: true });
+
+  const contentBytes = Buffer.byteLength(args.content, 'utf8');
+  if (contentBytes > MAX_TEXT_WRITE_BYTES) {
+    throw new Error(
+      `Content is ${contentBytes} bytes, max is ${MAX_TEXT_WRITE_BYTES}. Write smaller chunks.`,
+    );
+  }
+
+  if (args.append) {
+    const { appendFile } = await import('node:fs/promises');
+    await appendFile(resolved.absolutePath, args.content, 'utf8');
+  } else {
+    await writeFile(resolved.absolutePath, args.content, 'utf8');
+  }
+
+  const metadata = await stat(resolved.absolutePath);
+  return {
+    path: resolved.relativePath,
+    sizeBytes: metadata.size,
+    modifiedAt: metadata.mtime.toISOString(),
+    written: contentBytes,
+    mode: args.append ? 'append' : 'overwrite',
+  };
+}
+
 type GrokSearchSource = 'x' | 'web';
 
 interface GrokSearchArgs {
@@ -629,9 +678,12 @@ function buildSystemPrompt(): string {
   sections.push(
     [
       '## Files',
-      '- Custom user uploads are stored under workspace/user-files on this machine.',
+      '- Your persistent workspace is at workspace/user-files on this machine.',
       '- Use list_user_files to inspect available files/folders.',
       '- Use read_user_file to read text files from workspace/user-files.',
+      '- Use write_user_file to create or update files (soul.md, memories, notes, drafts, etc.).',
+      '- Files persist across conversations for this agent. Use them to remember context, store bio/soul text, keep logs, and save drafts.',
+      '- Recommended files: soul.md (identity/personality), memories/ (conversation learnings), drafts/ (post drafts).',
       '- Do not claim to have read a file unless read_user_file returned it.',
     ].join('\n'),
   );
@@ -937,6 +989,32 @@ function buildToolDefinitions(): ToolDefinition[] {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'write_user_file',
+        description:
+          'Write or append UTF-8 text to a file in workspace/user-files. Creates parent directories as needed. Use for saving memories, notes, soul text, or any persistent data.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: {
+              type: 'string',
+              description: 'Relative file path under workspace/user-files (e.g. "soul.md", "memories/log.md").',
+            },
+            content: {
+              type: 'string',
+              description: 'UTF-8 text content to write.',
+            },
+            append: {
+              type: 'boolean',
+              description: 'If true, append to file instead of overwriting. Defaults to false.',
+            },
+          },
+          required: ['path', 'content'],
+        },
+      },
+    },
   );
 
   return definitions;
@@ -973,6 +1051,8 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     listUserFilesForTool(args || {}),
   read_user_file: (args: { path?: string; maxBytes?: number }) =>
     readUserFileForTool(args || {}),
+  write_user_file: (args: { path?: string; content?: string; append?: boolean }) =>
+    writeUserFileForTool(args || {}),
 };
 
 const MUTATING_TOOLS = new Set([
@@ -980,6 +1060,7 @@ const MUTATING_TOOLS = new Set([
   'post_burn_memo',
   'auto_reclaim',
   'post_to_x',
+  'write_user_file',
 ]);
 
 interface ChatMessage {
