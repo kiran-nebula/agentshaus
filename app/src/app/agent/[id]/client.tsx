@@ -50,6 +50,12 @@ interface MachineInfo {
     mode?: string | null;
     autoReclaim?: boolean | null;
   };
+  telegram?: {
+    enabled?: boolean | null;
+    hasBotToken?: boolean;
+    allowedChatIds?: string[];
+    model?: string | null;
+  };
 }
 
 interface Message {
@@ -69,6 +75,7 @@ interface CronJobInfo {
 const CHAT_STORAGE_VERSION = 1;
 const MAX_PERSISTED_CHAT_MESSAGES = 120;
 const MAX_CHAT_MESSAGES = 120;
+const MAX_GROK_API_KEY_LENGTH = 600;
 const CHAT_QUICK_PROMPTS = [
   {
     label: 'Try to automatically reclaim lost Alpha spots',
@@ -425,6 +432,11 @@ function SettingsModal({
   const [cronLoading, setCronLoading] = useState(false);
   const [cronAvailable, setCronAvailable] = useState<boolean | null>(null);
   const [cronError, setCronError] = useState<string | null>(null);
+  const [grokApiKeyDraft, setGrokApiKeyDraft] = useState('');
+  const [grokDraftSavedAt, setGrokDraftSavedAt] = useState<string | null>(null);
+  const [telegramBotTokenDraft, setTelegramBotTokenDraft] = useState('');
+  const [telegramAllowedChatIdsDraft, setTelegramAllowedChatIdsDraft] = useState('');
+  const [telegramDraftSavedAt, setTelegramDraftSavedAt] = useState<string | null>(null);
 
   const handleToggleActive = async () => {
     if (!authenticated) { login(); return; }
@@ -557,6 +569,54 @@ function SettingsModal({
       setCronLoading(false);
     }
   }, [soulMint]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const storedGrokApiKey =
+      localStorage.getItem(`agent-grok-api-key:${soulMint}`)?.trim() || '';
+    const storedBotToken =
+      localStorage.getItem(`agent-telegram-bot-token:${soulMint}`)?.trim() || '';
+    const storedAllowedChatIds =
+      localStorage.getItem(`agent-telegram-chat-ids:${soulMint}`)?.trim() || '';
+    setGrokApiKeyDraft(storedGrokApiKey);
+    setTelegramBotTokenDraft(storedBotToken);
+    setTelegramAllowedChatIdsDraft(storedAllowedChatIds);
+    setGrokDraftSavedAt(null);
+    setTelegramDraftSavedAt(null);
+  }, [soulMint]);
+
+  const saveGrokDraft = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const grokApiKey = grokApiKeyDraft.trim();
+
+    if (grokApiKey) {
+      localStorage.setItem(`agent-grok-api-key:${soulMint}`, grokApiKey);
+    } else {
+      localStorage.removeItem(`agent-grok-api-key:${soulMint}`);
+    }
+
+    setGrokDraftSavedAt(new Date().toISOString());
+  }, [grokApiKeyDraft, soulMint]);
+
+  const saveTelegramDraft = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const token = telegramBotTokenDraft.trim();
+    const chatIds = telegramAllowedChatIdsDraft.trim();
+
+    if (token) {
+      localStorage.setItem(`agent-telegram-bot-token:${soulMint}`, token);
+    } else {
+      localStorage.removeItem(`agent-telegram-bot-token:${soulMint}`);
+    }
+
+    if (chatIds) {
+      localStorage.setItem(`agent-telegram-chat-ids:${soulMint}`, chatIds);
+    } else {
+      localStorage.removeItem(`agent-telegram-chat-ids:${soulMint}`);
+    }
+
+    setTelegramDraftSavedAt(new Date().toISOString());
+  }, [soulMint, telegramAllowedChatIdsDraft, telegramBotTokenDraft]);
 
   useEffect(() => {
     if (activeTab !== 'runtime') return;
@@ -727,6 +787,31 @@ function SettingsModal({
                             {machineInfo.scheduler?.enabled === true ? 'enabled' : machineInfo.scheduler?.enabled === false ? 'disabled' : '—'}
                           </span>
                         </div>
+                        <div className="flex justify-between">
+                          <span className="text-ink-muted">Grok key</span>
+                          <span className="font-mono text-ink">
+                            {machineInfo.hasGrokApiKey ? 'configured' : 'not set'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-ink-muted">Telegram</span>
+                          <span className="font-mono text-ink">
+                            {machineInfo.telegram?.enabled === true
+                              ? 'enabled'
+                              : machineInfo.telegram?.hasBotToken
+                                ? 'token set'
+                                : 'disabled'}
+                          </span>
+                        </div>
+                        {Array.isArray(machineInfo.telegram?.allowedChatIds) &&
+                          machineInfo.telegram.allowedChatIds.length > 0 && (
+                            <div className="flex justify-between gap-3">
+                              <span className="text-ink-muted">TG chats</span>
+                              <span className="font-mono text-ink text-right break-all">
+                                {machineInfo.telegram.allowedChatIds.join(', ')}
+                              </span>
+                            </div>
+                          )}
                         {machineInfo.scheduler?.enabled === true && (
                           <div className="flex justify-between">
                             <span className="text-ink-muted">Interval</span>
@@ -754,6 +839,146 @@ function SettingsModal({
                       )}
                     </div>
                   )}
+                </div>
+
+                <div className="rounded-xl border border-border-light p-4">
+                  <div className="text-sm font-medium text-ink mb-1">Grok API Key</div>
+                  <div className="text-xs text-ink-muted mb-3">
+                    Saved locally for this browser and applied on the next deploy/redeploy so chat can use Grok-backed responses.
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="mb-1 block text-xs text-ink-muted">API key</label>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={grokApiKeyDraft}
+                        onChange={(e) =>
+                          setGrokApiKeyDraft(
+                            e.target.value.slice(0, MAX_GROK_API_KEY_LENGTH),
+                          )
+                        }
+                        placeholder={machineInfo?.hasGrokApiKey ? 'Already configured on runtime' : 'xai-...'}
+                        className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-xs font-mono text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none"
+                      />
+                      <p className="mt-1 text-[10px] text-ink-muted">
+                        Store a per-agent key locally, then redeploy to inject it into runtime as <span className="font-mono">GROK_API_KEY</span>.
+                      </p>
+                    </div>
+
+                    {isOwner ? (
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <button
+                          type="button"
+                          onClick={saveGrokDraft}
+                          className="flex-1 rounded-xl border border-border px-3 py-2 text-xs font-medium text-ink-secondary hover:bg-surface-overlay transition-colors"
+                        >
+                          Save Local
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            saveGrokDraft();
+                            await handleDeployRuntime();
+                          }}
+                          disabled={loading}
+                          className="flex-1 rounded-xl bg-brand-500 px-3 py-2 text-xs font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50"
+                        >
+                          Save and Redeploy
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-ink-muted">
+                        Only the owner can redeploy runtime settings.
+                      </div>
+                    )}
+
+                    {grokDraftSavedAt && (
+                      <div className="text-[10px] text-ink-muted">
+                        Local draft saved at {new Date(grokDraftSavedAt).toLocaleTimeString()}.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border-light p-4">
+                  <div className="text-sm font-medium text-ink mb-1">Telegram Bridge</div>
+                  <div className="text-xs text-ink-muted mb-3">
+                    Saved locally for this browser and applied on the next deploy/redeploy.
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="mb-1 block text-xs text-ink-muted">Bot token</label>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={telegramBotTokenDraft}
+                        onChange={(e) => setTelegramBotTokenDraft(e.target.value)}
+                        placeholder={machineInfo?.telegram?.hasBotToken ? 'Already configured on runtime' : '123456:ABC-DEF...'}
+                        className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-xs font-mono text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-xs text-ink-muted">
+                        Allowed chat IDs (comma-separated)
+                      </label>
+                      <input
+                        type="text"
+                        value={telegramAllowedChatIdsDraft}
+                        onChange={(e) => setTelegramAllowedChatIdsDraft(e.target.value)}
+                        placeholder={
+                          Array.isArray(machineInfo?.telegram?.allowedChatIds) &&
+                          machineInfo.telegram.allowedChatIds.length > 0
+                            ? machineInfo.telegram.allowedChatIds.join(', ')
+                            : '-1001234567890, 123456789'
+                        }
+                        className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-xs font-mono text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none"
+                      />
+                      <p className="mt-1 text-[10px] text-ink-muted">
+                        Leave empty to allow all chats. Use numeric chat IDs from Telegram.
+                      </p>
+                    </div>
+
+                    {machineInfo?.telegram?.model && (
+                      <div className="text-[10px] text-ink-muted">
+                        Runtime Telegram model override: <span className="font-mono">{machineInfo.telegram.model}</span>
+                      </div>
+                    )}
+
+                    {isOwner ? (
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <button
+                          type="button"
+                          onClick={saveTelegramDraft}
+                          className="flex-1 rounded-xl border border-border px-3 py-2 text-xs font-medium text-ink-secondary hover:bg-surface-overlay transition-colors"
+                        >
+                          Save Local
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            saveTelegramDraft();
+                            await handleDeployRuntime();
+                          }}
+                          disabled={loading}
+                          className="flex-1 rounded-xl bg-brand-500 px-3 py-2 text-xs font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50"
+                        >
+                          Save and Redeploy
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-ink-muted">Only the owner can redeploy runtime settings.</div>
+                    )}
+
+                    {telegramDraftSavedAt && (
+                      <div className="text-[10px] text-ink-muted">
+                        Local draft saved at {new Date(telegramDraftSavedAt).toLocaleTimeString()}.
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="rounded-xl border border-border-light p-4">
@@ -1295,12 +1520,27 @@ export function AgentDetailClient({ soulMint }: Props) {
         typeof window !== 'undefined'
           ? localStorage.getItem(`agent-posting-topics:${soulMint}`)
           : null;
+      const storedTelegramBotToken =
+        typeof window !== 'undefined'
+          ? localStorage.getItem(`agent-telegram-bot-token:${soulMint}`)?.trim() || ''
+          : '';
+      const storedTelegramAllowedChatIds =
+        typeof window !== 'undefined'
+          ? localStorage.getItem(`agent-telegram-chat-ids:${soulMint}`)?.trim() || ''
+          : '';
       const storedPostingTopics = parsePostingTopics(storedPostingTopicsRaw);
       const fallbackPostingTopics = parsePostingTopics(machineInfo?.postingTopics);
+      const fallbackTelegramAllowedChatIds = Array.isArray(
+        machineInfo?.telegram?.allowedChatIds,
+      )
+        ? machineInfo.telegram.allowedChatIds.join(',')
+        : '';
       const runtimePostingTopics =
         storedPostingTopics.length > 0
           ? storedPostingTopics
           : fallbackPostingTopics;
+      const runtimeTelegramAllowedChatIds =
+        storedTelegramAllowedChatIds || fallbackTelegramAllowedChatIds;
       const deployPayload = {
         force: true,
         profileId: deployPreset.profileId,
@@ -1309,6 +1549,12 @@ export function AgentDetailClient({ soulMint }: Props) {
         runtimeProvider: deployPreset.runtimeProvider,
         ...(storedSoulText ? { soulText: storedSoulText } : {}),
         ...(storedGrokApiKey ? { grokApiKey: storedGrokApiKey } : {}),
+        ...(storedTelegramBotToken
+          ? { telegramBotToken: storedTelegramBotToken }
+          : {}),
+        ...(runtimeTelegramAllowedChatIds
+          ? { telegramAllowedChatIds: runtimeTelegramAllowedChatIds }
+          : {}),
         ...(runtimePostingTopics.length > 0
           ? { postingTopics: runtimePostingTopics }
           : {}),
@@ -1410,7 +1656,7 @@ export function AgentDetailClient({ soulMint }: Props) {
       {/* Main chat area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
-        <div className="flex shrink-0 items-center gap-3 border-b border-border-light px-3 py-2.5 sm:px-4">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border-light px-3 py-2.5 sm:gap-3 sm:px-4">
           <Link href="/dashboard" className="rounded-lg p-1.5 text-ink-muted hover:text-ink hover:bg-surface-overlay transition-colors">
             <IconBack />
           </Link>
@@ -1419,7 +1665,15 @@ export function AgentDetailClient({ soulMint }: Props) {
             <span className="text-sm font-medium text-ink truncate">Agent</span>
             <span className="text-[11px] text-ink-muted font-mono truncate hidden sm:inline">{truncateAddress(soulMint, 4)}</span>
           </div>
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+            <div className="shrink-0 rounded-lg border border-brand-500/35 bg-brand-500/10 px-2 py-1 sm:px-2.5 sm:py-1.5">
+              <div className="text-[9px] font-medium uppercase tracking-[0.08em] text-brand-700/90 dark:text-brand-400/90">
+                PDA Wallet
+              </div>
+              <div className="font-mono text-xs font-semibold text-brand-700 dark:text-brand-300 sm:text-sm">
+                {lamportsToSol(walletBalance).toFixed(4)} <span className="text-[10px] font-medium sm:text-xs">SOL</span>
+              </div>
+            </div>
             <button
               onClick={clearConversation}
               disabled={chatLoading || messages.length === 0}

@@ -19,7 +19,13 @@ const MIME_EXTENSION: Record<string, string> = {
 };
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_OPENROUTER_IMAGE_MODEL =
-  'google/gemini-2.5-flash-image-preview';
+  'google/gemini-2.5-flash-image';
+const OPENROUTER_IMAGE_MODEL_FALLBACKS = [
+  'google/gemini-2.5-flash-image',
+  'google/gemini-3.1-flash-image-preview',
+  'google/gemini-3-pro-image-preview',
+  'openai/gpt-5-image-mini',
+];
 const SUPPORTED_ASPECT_RATIOS = new Set([
   '1:1',
   '2:3',
@@ -111,6 +117,95 @@ function normalizeAspectRatio(value: unknown): string | null {
   return SUPPORTED_ASPECT_RATIOS.has(trimmed) ? trimmed : null;
 }
 
+function dedupeModels(models: string[]): string[] {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const model of models) {
+    const normalized = normalizeModel(model);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(normalized);
+  }
+  return deduped;
+}
+
+function getOpenRouterErrorMessage(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const error = (payload as { error?: unknown }).error;
+  if (!error || typeof error !== 'object') return null;
+  const message = (error as { message?: unknown }).message;
+  return typeof message === 'string' ? message : null;
+}
+
+function isUnavailableModelError(message: string | null): boolean {
+  if (!message) return false;
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('no endpoints found') ||
+    normalized.includes('model not found') ||
+    normalized.includes('not available') ||
+    normalized.includes('unknown model')
+  );
+}
+
+type OpenRouterModelAttempt = {
+  ok: boolean;
+  status: number;
+  payload: unknown;
+  model: string;
+};
+
+async function requestOpenRouterImageCompletion(args: {
+  model: string;
+  prompt: string;
+  aspectRatio: string;
+  httpReferer: string;
+  apiKey: string;
+}): Promise<OpenRouterModelAttempt> {
+  const sendOpenRouterRequest = async (modalities: string[]) =>
+    fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${args.apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': args.httpReferer,
+        'X-Title': 'agents.haus',
+      },
+      body: JSON.stringify({
+        model: args.model,
+        messages: [{ role: 'user', content: args.prompt }],
+        modalities,
+        image_config: { aspect_ratio: args.aspectRatio },
+        stream: false,
+      }),
+    });
+
+  let response = await sendOpenRouterRequest(['image', 'text']);
+  let payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const fallbackResponse = await sendOpenRouterRequest(['image']);
+    const fallbackPayload = await fallbackResponse.json().catch(() => null);
+    if (fallbackResponse.ok) {
+      response = fallbackResponse;
+      payload = fallbackPayload;
+    } else {
+      const firstError = getOpenRouterErrorMessage(payload);
+      const fallbackError = getOpenRouterErrorMessage(fallbackPayload);
+      if (isUnavailableModelError(firstError) || isUnavailableModelError(fallbackError)) {
+        response = fallbackResponse;
+        payload = fallbackPayload;
+      }
+    }
+  }
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    payload,
+    model: args.model,
+  };
+}
+
 async function handleImageUpload(request: NextRequest): Promise<NextResponse> {
   const formData = await request.formData();
   const file = formData.get('file');
@@ -165,77 +260,85 @@ async function handleImageGeneration(request: NextRequest): Promise<NextResponse
   const aspectRatio = normalizeAspectRatio(body?.aspectRatio) || '1:1';
   const httpReferer =
     (request.headers.get('origin') || '').trim() || 'https://agents.haus';
+  const candidateModels = dedupeModels([
+    selectedModel,
+    ...OPENROUTER_IMAGE_MODEL_FALLBACKS,
+  ]);
 
-  const sendOpenRouterRequest = async (modalities: string[]) =>
-    fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${openRouterApiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': httpReferer,
-        'X-Title': 'agents.haus',
-      },
-      body: JSON.stringify({
-        model: selectedModel,
-        messages: [{ role: 'user', content: prompt }],
-        modalities,
-        image_config: { aspect_ratio: aspectRatio },
-        stream: false,
-      }),
+  let selectedPayload: unknown = null;
+  let selectedModelUsed = selectedModel;
+  let selectedStatus = 502;
+  let selectedErrorMessage: string | null = null;
+
+  for (const model of candidateModels) {
+    const attempt = await requestOpenRouterImageCompletion({
+      model,
+      prompt,
+      aspectRatio,
+      httpReferer,
+      apiKey: openRouterApiKey,
     });
 
-  let openRouterResponse = await sendOpenRouterRequest(['image', 'text']);
-  let openRouterPayload = await openRouterResponse.json().catch(() => null);
+    if (attempt.ok) {
+      const generatedImageUrl = getOpenRouterImageUrl(attempt.payload);
+      if (generatedImageUrl) {
+        const imageResponse = await fetch(generatedImageUrl);
+        if (!imageResponse.ok) {
+          return NextResponse.json(
+            { error: 'Failed to download generated image from OpenRouter response' },
+            { status: 502 },
+          );
+        }
 
-  if (!openRouterResponse.ok) {
-    const fallbackResponse = await sendOpenRouterRequest(['image']);
-    const fallbackPayload = await fallbackResponse.json().catch(() => null);
-    if (fallbackResponse.ok) {
-      openRouterResponse = fallbackResponse;
-      openRouterPayload = fallbackPayload;
+        const generatedImage = await imageResponse.blob();
+        const contentTypeHint =
+          imageResponse.headers.get('content-type') || generatedImage.type;
+        const url = await uploadSoulImageToBlob(generatedImage, contentTypeHint);
+
+        return NextResponse.json({
+          url,
+          source: 'openrouter',
+          model,
+        });
+      }
+
+      selectedPayload = attempt.payload;
+      selectedStatus = attempt.status;
+      selectedModelUsed = model;
+      selectedErrorMessage = 'OpenRouter did not return an image';
+      continue;
     }
-  }
 
-  if (!openRouterResponse.ok) {
-    const errorMessage =
-      (openRouterPayload &&
-        typeof openRouterPayload === 'object' &&
-        typeof (openRouterPayload as { error?: { message?: unknown } }).error
-          ?.message === 'string' &&
-        (openRouterPayload as { error?: { message?: string } }).error?.message) ||
-      'OpenRouter image generation failed';
+    const errorMessage = getOpenRouterErrorMessage(attempt.payload);
+    selectedPayload = attempt.payload;
+    selectedStatus = attempt.status;
+    selectedModelUsed = model;
+    selectedErrorMessage = errorMessage || 'OpenRouter image generation failed';
+
+    if (isUnavailableModelError(errorMessage)) {
+      continue;
+    }
+
     return NextResponse.json(
-      { error: errorMessage },
-      { status: openRouterResponse.status >= 500 ? 502 : 400 },
+      { error: selectedErrorMessage },
+      { status: attempt.status >= 500 ? 502 : 400 },
     );
   }
 
-  const generatedImageUrl = getOpenRouterImageUrl(openRouterPayload);
+  const generatedImageUrl = getOpenRouterImageUrl(selectedPayload);
   if (!generatedImageUrl) {
     return NextResponse.json(
-      { error: 'OpenRouter did not return an image' },
-      { status: 502 },
+      {
+        error:
+          selectedErrorMessage || `No endpoints found for ${selectedModelUsed}.`,
+      },
+      { status: selectedStatus >= 500 ? 502 : 400 },
     );
   }
-
-  const imageResponse = await fetch(generatedImageUrl);
-  if (!imageResponse.ok) {
-    return NextResponse.json(
-      { error: 'Failed to download generated image from OpenRouter response' },
-      { status: 502 },
-    );
-  }
-
-  const generatedImage = await imageResponse.blob();
-  const contentTypeHint =
-    imageResponse.headers.get('content-type') || generatedImage.type;
-  const url = await uploadSoulImageToBlob(generatedImage, contentTypeHint);
-
-  return NextResponse.json({
-    url,
-    source: 'openrouter',
-    model: selectedModel,
-  });
+  return NextResponse.json(
+    { error: 'Failed to process OpenRouter image response' },
+    { status: 502 },
+  );
 }
 
 export async function POST(request: NextRequest) {

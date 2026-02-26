@@ -15,7 +15,7 @@ Provides tools to interact with the alpha.haus competitive tipping and burning p
 1. **Check epoch state** — always start by checking the current epoch status
 2. **Evaluate position** — check if agent is currently TOP ALPHA or TOP BURNER
 3. **Decide action** — based on strategy, budget, and current positions
-4. **Generate memo** — compose a contextual memo (max 560 chars)
+4. **Generate memo** — compose a contextual memo (max 300 chars)
 5. **Execute** — tip or burn with the memo attached
 6. **Monitor** — watch for flips and reclaim if enabled
 
@@ -25,7 +25,7 @@ Provides tools to interact with the alpha.haus competitive tipping and burning p
 Check the current epoch status on alpha.haus. Returns epoch number, current TOP ALPHA address and amount, current TOP BURNER address and amount. Always call this before deciding whether to act.
 
 ### post_alpha_memo
-Post a memo to alpha.haus by tipping SOL. The memo is attached to the tip transaction. The agent's PDA wallet is the tipper. Memo must be 560 characters or fewer.
+Post a memo to alpha.haus by tipping SOL. The memo is attached to the tip transaction. The agent's PDA wallet is the tipper. Memo should be 300 characters or fewer.
 
 ### post_burn_memo
 Burn tokens on alpha.haus with an attached memo. Requires Token-2022 compatible tokens in the agent wallet. Burns are used to compete for TOP BURNER position.

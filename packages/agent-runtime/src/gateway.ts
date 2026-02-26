@@ -2,7 +2,7 @@
  * Lightweight OpenAI-compatible chat gateway for the agent runtime.
  *
  * Listens on PORT (default 3001) and exposes:
- *   POST /v1/chat/completions — proxies to OpenRouter with tool-use support
+ *   POST /v1/chat/completions — proxies to OpenRouter or Grok with tool-use support
  *   GET  /v1/files/tree        — browse runtime filesystem roots
  *   POST /v1/files/upload      — upload files into workspace/user-files
  *   GET  /health               — health check
@@ -20,11 +20,31 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const OPENROUTER_API_KEY = (process.env.OPENROUTER_API_KEY || '').trim();
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const OPENROUTER_ALLOW_FALLBACKS =
   (process.env.OPENROUTER_ALLOW_FALLBACKS || 'false').trim().toLowerCase() ===
   'true';
+const GROK_API_KEY = (process.env.GROK_API_KEY || '').trim();
+const GROK_BASE_URL = (
+  process.env.GROK_BASE_URL ||
+  process.env.XAI_BASE_URL ||
+  'https://api.x.ai/v1'
+)
+  .trim()
+  .replace(/\/+$/, '');
+const GROK_DEFAULT_MODEL = (
+  process.env.GROK_MODEL ||
+  process.env.GROK_DEFAULT_MODEL ||
+  ''
+).trim();
+const GROK_MODEL_LIST_CACHE_MS = 5 * 60 * 1000;
+const GROK_MODEL_FALLBACKS = [
+  'grok-4-fast-reasoning',
+  'grok-4-fast-non-reasoning',
+  'grok-4',
+  'grok-3-mini',
+];
 const DEFAULT_MODEL = (process.env.AGENT_MODEL || 'moonshotai/kimi-k2.5').trim();
 const AGENT_PROFILE_ID = (process.env.AGENT_PROFILE_ID || 'alpha-hunter').trim();
 const RUNTIME_ROOT = process.cwd();
@@ -339,7 +359,7 @@ function buildSystemPrompt(): string {
         '- TOP BURNER: highest token burner gets 15% of epoch tokens.',
         '- Tip flip cost: current top tip + 0.001 SOL.',
         '- Burn flip cost: current top burn + 1 token.',
-        '- Memos are capped at 560 characters.',
+        '- Memos are capped at 300 characters.',
         '- SOL tips and token burns spend from the agent wallet PDA.',
         '- Executor wallet only covers Solana transaction fees.',
         '- Token burn actions reference the agent wallet token accounts.',
@@ -428,11 +448,11 @@ function buildToolDefinitions(): ToolDefinition[] {
         function: {
           name: 'post_alpha_memo',
           description:
-            'Post an alpha.haus memo by tipping SOL. Memo max length is 560 characters.',
+            'Post an alpha.haus memo by tipping SOL. Memo max length is 300 characters.',
           parameters: {
             type: 'object',
             properties: {
-              memo: { type: 'string', description: 'Memo text (max 560 chars)' },
+              memo: { type: 'string', description: 'Memo text (max 300 chars)' },
               amount: {
                 type: 'number',
                 description: 'Tip amount in SOL. Omit to auto-flip (current top + 0.001 SOL).',
@@ -451,7 +471,7 @@ function buildToolDefinitions(): ToolDefinition[] {
           parameters: {
             type: 'object',
             properties: {
-              memo: { type: 'string', description: 'Memo text (max 560 chars)' },
+              memo: { type: 'string', description: 'Memo text (max 300 chars)' },
               amount: {
                 type: 'number',
                 description: 'Burn amount in tokens. Omit to auto-flip (current top + 1 token).',
@@ -636,80 +656,318 @@ function safeJSONStringify(value: unknown): string {
   );
 }
 
-function resolveModel(requestedModel: unknown): string {
-  if (typeof requestedModel !== 'string') return DEFAULT_MODEL;
+type LlmBackend = 'openrouter' | 'grok';
+
+interface ChatCompletionResult {
+  content: string;
+  model: string;
+}
+
+let grokModelCache: { fetchedAt: number; models: string[] } = {
+  fetchedAt: 0,
+  models: [],
+};
+
+function resolveRequestedModel(requestedModel: unknown): string {
+  if (typeof requestedModel !== 'string') return 'default';
   const normalized = requestedModel.trim();
-  if (!normalized || normalized === 'default') return DEFAULT_MODEL;
+  if (!normalized) return 'default';
   return normalized;
 }
 
+function normalizeGrokModelId(model: string): string {
+  return model
+    .trim()
+    .replace(/^openrouter\//i, '')
+    .replace(/^x-ai\//i, '')
+    .replace(/^xai\//i, '')
+    .trim();
+}
+
+function isLikelyGrokModel(model: string): boolean {
+  if (!model || model === 'default') return false;
+  const normalized = normalizeGrokModelId(model).toLowerCase();
+  return normalized.startsWith('grok-');
+}
+
+function resolveOpenRouterModel(requestedModel: string): string {
+  if (requestedModel === 'default') return DEFAULT_MODEL;
+  if (isLikelyGrokModel(requestedModel)) {
+    return `x-ai/${normalizeGrokModelId(requestedModel)}`;
+  }
+  return requestedModel;
+}
+
+function resolveChatBackend(requestedModel: string): LlmBackend | null {
+  const requestedIsDefault = requestedModel === 'default';
+  const requestedIsGrok = !requestedIsDefault && isLikelyGrokModel(requestedModel);
+
+  if (requestedIsGrok && GROK_API_KEY) return 'grok';
+  if (requestedIsGrok && OPENROUTER_API_KEY) return 'openrouter';
+
+  if (!requestedIsDefault && OPENROUTER_API_KEY) return 'openrouter';
+  if (!requestedIsDefault && GROK_API_KEY) return 'grok';
+
+  if (requestedIsDefault) {
+    if (GROK_API_KEY && (ENABLE_GROK_WRITER || !OPENROUTER_API_KEY)) {
+      return 'grok';
+    }
+    if (OPENROUTER_API_KEY) return 'openrouter';
+    if (GROK_API_KEY) return 'grok';
+  }
+
+  return null;
+}
+
+async function fetchAvailableGrokModels(): Promise<string[]> {
+  if (!GROK_API_KEY) return [];
+
+  const now = Date.now();
+  if (
+    grokModelCache.models.length > 0 &&
+    now - grokModelCache.fetchedAt < GROK_MODEL_LIST_CACHE_MS
+  ) {
+    return grokModelCache.models;
+  }
+
+  try {
+    const response = await fetch(`${GROK_BASE_URL}/models`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${GROK_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      console.warn(
+        `[gateway] Grok model list fetch failed (${response.status}): ${errText.slice(0, 200)}`,
+      );
+      return grokModelCache.models;
+    }
+
+    const payload = (await response.json().catch(() => null)) as
+      | { data?: Array<{ id?: unknown }> }
+      | null;
+    const models = Array.from(
+      new Set(
+        (Array.isArray(payload?.data) ? payload.data : [])
+          .map((entry) => (typeof entry?.id === 'string' ? entry.id.trim() : ''))
+          .filter(Boolean),
+      ),
+    );
+
+    if (models.length > 0) {
+      grokModelCache = { fetchedAt: now, models };
+    } else if (grokModelCache.models.length === 0) {
+      grokModelCache = { fetchedAt: now, models: [] };
+    }
+
+    return grokModelCache.models;
+  } catch (err) {
+    console.warn(
+      `[gateway] Grok model list fetch error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return grokModelCache.models;
+  }
+}
+
+async function resolveGrokModel(requestedModel: string): Promise<string> {
+  if (requestedModel !== 'default' && isLikelyGrokModel(requestedModel)) {
+    return normalizeGrokModelId(requestedModel);
+  }
+
+  const configuredCandidates = Array.from(
+    new Set(
+      [
+        GROK_DEFAULT_MODEL,
+        ...GROK_MODEL_FALLBACKS,
+      ]
+        .map((candidate) => normalizeGrokModelId(candidate))
+        .filter(Boolean),
+    ),
+  );
+
+  const availableModels = await fetchAvailableGrokModels();
+  if (availableModels.length > 0) {
+    const availableLower = new Set(
+      availableModels.map((candidate) => candidate.toLowerCase()),
+    );
+    for (const candidate of configuredCandidates) {
+      if (availableLower.has(candidate.toLowerCase())) {
+        return candidate;
+      }
+    }
+
+    const preferredAvailable = availableModels.find((candidate) =>
+      isLikelyGrokModel(candidate),
+    );
+    if (preferredAvailable) return preferredAvailable;
+    return availableModels[0];
+  }
+
+  return configuredCandidates[0] || GROK_MODEL_FALLBACKS[0];
+}
+
+async function resolveAlternateGrokModel(currentModel: string): Promise<string | null> {
+  const current = currentModel.trim().toLowerCase();
+  const availableModels = await fetchAvailableGrokModels();
+  if (availableModels.length === 0) return null;
+
+  const preferred = availableModels.find(
+    (candidate) =>
+      candidate.toLowerCase() !== current && isLikelyGrokModel(candidate),
+  );
+  if (preferred) return preferred;
+
+  return (
+    availableModels.find((candidate) => candidate.toLowerCase() !== current) ||
+    null
+  );
+}
+
+function isMissingModelError(status: number, errText: string): boolean {
+  if (status === 404) return true;
+  return /model[^.\n]*not found|unknown model|invalid model/i.test(errText);
+}
+
+async function sendChatCompletionRequest(
+  backend: LlmBackend,
+  payload: Record<string, unknown>,
+): Promise<Response> {
+  if (backend === 'grok') {
+    return fetch(`${GROK_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${GROK_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  return fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://agents.haus',
+      'X-Title': 'agents.haus',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
 /**
- * Call OpenRouter chat completions API with tool support.
+ * Call chat completions API with tool support.
  * Handles the tool-call loop: if the model returns tool_calls,
  * execute them and feed results back until a final text response.
  */
-async function chatCompletion(messages: ChatMessage[], model: string): Promise<string> {
-  if (!OPENROUTER_API_KEY) {
-    return 'Chat is not available — OPENROUTER_API_KEY is not configured.';
+async function chatCompletion(
+  messages: ChatMessage[],
+  requestedModel: string,
+): Promise<ChatCompletionResult> {
+  const backend = resolveChatBackend(requestedModel);
+  if (!backend) {
+    return {
+      content:
+        'Chat is not available — configure OPENROUTER_API_KEY or GROK_API_KEY.',
+      model: DEFAULT_MODEL,
+    };
   }
 
-  const fullMessages: ChatMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }, ...messages];
+  let activeModel =
+    backend === 'grok'
+      ? await resolveGrokModel(requestedModel)
+      : resolveOpenRouterModel(requestedModel);
+  let retriedGrokModel = false;
+  const fullMessages: ChatMessage[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...messages,
+  ];
 
   for (let i = 0; i < 5; i++) {
     const payload: Record<string, unknown> = {
-      model,
+      model: activeModel,
       messages: fullMessages,
       max_tokens: 4096,
       temperature: 0.7,
-      provider: {
+    };
+    if (backend === 'openrouter') {
+      payload.provider = {
         // Keep requests pinned to the selected model unless explicitly overridden.
         allow_fallbacks: OPENROUTER_ALLOW_FALLBACKS,
-      },
-    };
+      };
+    }
     if (TOOL_DEFINITIONS.length > 0) {
       payload.tools = TOOL_DEFINITIONS;
       payload.tool_choice = 'auto';
     }
 
-    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://agents.haus',
-        'X-Title': 'agents.haus',
-      },
-      body: JSON.stringify(payload),
-    });
+    const response = await sendChatCompletionRequest(backend, payload);
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error(`OpenRouter error (${response.status}):`, errText);
-      return `LLM error: ${response.status} — ${errText.slice(0, 200)}`;
+
+      if (
+        backend === 'grok' &&
+        !retriedGrokModel &&
+        isMissingModelError(response.status, errText)
+      ) {
+        const alternate = await resolveAlternateGrokModel(activeModel);
+        if (alternate) {
+          retriedGrokModel = true;
+          activeModel = alternate;
+          continue;
+        }
+      }
+
+      const backendLabel = backend === 'grok' ? 'Grok' : 'OpenRouter';
+      console.error(`${backendLabel} error (${response.status}):`, errText);
+      return {
+        content: `LLM error: ${response.status} — ${errText.slice(0, 200)}`,
+        model: activeModel,
+      };
     }
 
     const data = await response.json();
     const choice = data.choices?.[0];
+    const responseModel =
+      typeof data.model === 'string' && data.model.trim()
+        ? data.model.trim()
+        : activeModel;
 
-    if (!choice) {
-      return 'No response from LLM.';
+    if (!choice?.message) {
+      return { content: 'No response from LLM.', model: responseModel };
     }
 
-    const assistantMsg = choice.message;
-
+    const assistantMsg = choice.message as ChatMessage;
     if (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0) {
-      return assistantMsg.content || 'No response.';
+      return {
+        content:
+          typeof assistantMsg.content === 'string'
+            ? assistantMsg.content
+            : 'No response.',
+        model: responseModel,
+      };
     }
 
     fullMessages.push(assistantMsg);
 
     for (const toolCall of assistantMsg.tool_calls) {
       const fnName = toolCall.function.name;
-      const fnArgs = toolCall.function.arguments
-        ? JSON.parse(toolCall.function.arguments)
-        : {};
+      let fnArgs: Record<string, unknown> = {};
+      if (toolCall.function.arguments) {
+        try {
+          fnArgs = JSON.parse(toolCall.function.arguments);
+        } catch {
+          fnArgs = { _raw: toolCall.function.arguments };
+        }
+      }
 
-      console.log(`[gateway] Tool call: ${fnName}(${safeJSONStringify(fnArgs)})`);
+      console.log(
+        `[gateway:${backend}] Tool call: ${fnName}(${safeJSONStringify(fnArgs)})`,
+      );
 
       const executor = TOOL_EXECUTORS[fnName];
       let result: any;
@@ -724,7 +982,9 @@ async function chatCompletion(messages: ChatMessage[], model: string): Promise<s
         result = { error: `Unknown tool: ${fnName}` };
       }
 
-      console.log(`[gateway] Tool result: ${safeJSONStringify(result).slice(0, 200)}`);
+      console.log(
+        `[gateway:${backend}] Tool result: ${safeJSONStringify(result).slice(0, 200)}`,
+      );
 
       if (
         MUTATING_TOOLS.has(fnName) &&
@@ -733,7 +993,7 @@ async function chatCompletion(messages: ChatMessage[], model: string): Promise<s
         'error' in result &&
         typeof (result as { error?: unknown }).error === 'string'
       ) {
-        return safeJSONStringify(result);
+        return { content: safeJSONStringify(result), model: responseModel };
       }
 
       fullMessages.push({
@@ -744,17 +1004,23 @@ async function chatCompletion(messages: ChatMessage[], model: string): Promise<s
     }
   }
 
-  return 'Reached maximum tool-call iterations.';
+  return {
+    content: 'Reached maximum tool-call iterations.',
+    model: activeModel,
+  };
 }
 
 /**
  * Start the HTTP gateway server.
  */
 export function startGateway(options?: { getRuntimeStatus?: RuntimeStatusProvider }) {
+  const llmProviders: string[] = [];
+  if (OPENROUTER_API_KEY) llmProviders.push('openrouter');
+  if (GROK_API_KEY) llmProviders.push('grok');
   console.log(
     `[gateway] profile=${AGENT_PROFILE_ID} model=${DEFAULT_MODEL} skills=${Array.from(
       ENABLED_SKILLS,
-    ).join(',') || '(default:alpha-haus)'} topics=${POSTING_TOPICS.join('|') || '(none)'}`,
+    ).join(',') || '(default:alpha-haus)'} topics=${POSTING_TOPICS.join('|') || '(none)'} llmProviders=${llmProviders.join('|') || '(none)'}`,
   );
   void ensureUserFilesRoot().catch((err) => {
     console.error('[gateway] Failed to initialize user-files directory:', err);
@@ -890,19 +1156,18 @@ export function startGateway(options?: { getRuntimeStatus?: RuntimeStatusProvide
         try {
           const body = (await req.json()) as { messages?: ChatMessage[]; model?: string };
           const messages: ChatMessage[] = body.messages || [];
-          const activeModel = resolveModel(body.model);
-
-          const response = await chatCompletion(messages, activeModel);
+          const requestedModel = resolveRequestedModel(body.model);
+          const completion = await chatCompletion(messages, requestedModel);
 
           return Response.json({
             id: `chatcmpl-${Date.now()}`,
             object: 'chat.completion',
             created: Math.floor(Date.now() / 1000),
-            model: activeModel,
+            model: completion.model,
             choices: [
               {
                 index: 0,
-                message: { role: 'assistant', content: response },
+                message: { role: 'assistant', content: completion.content },
                 finish_reason: 'stop',
               },
             ],

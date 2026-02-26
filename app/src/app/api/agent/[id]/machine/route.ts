@@ -51,6 +51,14 @@ function parsePostingTopics(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseTelegramChatIds(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(/[|,]/)
+    .map((entry) => entry.trim())
+    .filter((entry) => /^-?\d+$/.test(entry));
+}
+
 function decodeBase58(value: string): Uint8Array {
   let num = BigInt(0);
   for (const char of value) {
@@ -125,6 +133,15 @@ export async function GET(
     const schedulerStartupDelaySeconds = parseIntValue(
       env.RUNTIME_SCHEDULER_STARTUP_DELAY_SECONDS,
     );
+    const telegramAllowedChatIds = Array.from(
+      new Set([
+        ...parseTelegramChatIds(env.TELEGRAM_ALLOWED_CHAT_IDS),
+        ...parseTelegramChatIds(env.TELEGRAM_CHAT_ID),
+      ]),
+    );
+    const telegramEnabled =
+      parseBoolean(env.TELEGRAM_ENABLED) ??
+      Boolean((env.TELEGRAM_BOT_TOKEN || '').trim());
 
     return NextResponse.json({
       deployed: true,
@@ -148,6 +165,12 @@ export async function GET(
         startupDelaySeconds: schedulerStartupDelaySeconds,
         mode: env.RUNTIME_SCHEDULER_MODE || null,
         autoReclaim: parseBoolean(env.RUNTIME_AUTO_RECLAIM),
+      },
+      telegram: {
+        enabled: telegramEnabled,
+        hasBotToken: Boolean((env.TELEGRAM_BOT_TOKEN || '').trim()),
+        allowedChatIds: telegramAllowedChatIds,
+        model: env.TELEGRAM_MODEL || null,
       },
       createdAt: machine.created_at,
       updatedAt: machine.updated_at,

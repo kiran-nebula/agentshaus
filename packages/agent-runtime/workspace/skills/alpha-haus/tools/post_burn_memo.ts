@@ -4,7 +4,7 @@
  * Executes a token burn transaction on alpha.haus with an attached memo.
  * Requires Token-2022 compatible tokens in the agent's token account.
  *
- * @param memo - The memo text to post (max 560 characters)
+ * @param memo - The memo text to post (max 300 characters)
  * @param amount - Burn amount in tokens (defaults to flip amount: current + 1)
  */
 
@@ -29,6 +29,7 @@ import {
 import { buildAndSendTransaction } from '../../../../src/tx';
 
 const addressEncoder = getAddressEncoder();
+const SAFE_MEMO_CHAR_LIMIT = 300;
 
 /** Derive the associated token account for Token-2022 */
 async function getAssociatedTokenAddress(
@@ -50,10 +51,13 @@ async function getAssociatedTokenAddress(
 
 export async function postBurnMemo(params: { memo: string; amount?: number }) {
   const { memo, amount } = params;
-
-  if (memo.length > 560) {
-    return { success: false, error: 'Memo exceeds 560 character limit' };
-  }
+  const normalizedMemo = memo.trim();
+  if (!normalizedMemo) return { success: false, error: 'Memo cannot be empty' };
+  const finalMemo =
+    normalizedMemo.length > SAFE_MEMO_CHAR_LIMIT
+      ? normalizedMemo.slice(0, SAFE_MEMO_CHAR_LIMIT).trim()
+      : normalizedMemo;
+  const memoTruncated = finalMemo.length !== normalizedMemo.length;
 
   try {
     const rpc = getRpc();
@@ -131,7 +135,7 @@ export async function postBurnMemo(params: { memo: string; amount?: number }) {
         currEpoch: epoch,
         burnEpoch: epoch,
         burnAmount,
-        memo,
+        memo: finalMemo,
         taggedAddresses: [],
       },
     );
@@ -143,7 +147,8 @@ export async function postBurnMemo(params: { memo: string; amount?: number }) {
       signature,
       epoch: Number(epoch),
       burnAmount: Number(burnAmount) / 1_000_000,
-      memo,
+      memo: finalMemo,
+      memoTruncated,
     };
   } catch (err) {
     return {

@@ -4,7 +4,7 @@
  * Executes a tip transaction on alpha.haus via agents.haus CPI.
  * The agent wallet PDA is the posting identity and tipper.
  *
- * @param memo - The memo text to post (max 560 characters)
+ * @param memo - The memo text to post (max 300 characters)
  * @param amount - Optional tip amount in SOL (defaults to flip amount: current + 0.001)
  */
 
@@ -27,13 +27,17 @@ import {
 import { buildAndSendTransaction } from '../../../../src/tx';
 
 const SYSTEM_PROGRAM = '11111111111111111111111111111111' as Address;
+const SAFE_MEMO_CHAR_LIMIT = 300;
 
 export async function postAlphaMemo(params: { memo: string; amount?: number }) {
   const { memo, amount } = params;
-
-  if (memo.length > 560) {
-    return { success: false, error: 'Memo exceeds 560 character limit' };
-  }
+  const normalizedMemo = memo.trim();
+  if (!normalizedMemo) return { success: false, error: 'Memo cannot be empty' };
+  const finalMemo =
+    normalizedMemo.length > SAFE_MEMO_CHAR_LIMIT
+      ? normalizedMemo.slice(0, SAFE_MEMO_CHAR_LIMIT).trim()
+      : normalizedMemo;
+  const memoTruncated = finalMemo.length !== normalizedMemo.length;
 
   try {
     const rpc = getRpc();
@@ -100,7 +104,7 @@ export async function postAlphaMemo(params: { memo: string; amount?: number }) {
         epoch,
         uuid: crypto.randomUUID(),
         amount: tipLamports,
-        memo,
+        memo: finalMemo,
         taggedAddresses: [] as Address[],
       },
     );
@@ -117,7 +121,8 @@ export async function postAlphaMemo(params: { memo: string; amount?: number }) {
       identityWallet: agentWallet as string,
       agentWallet: agentWallet as string,
       executorWallet: executor as string,
-      memo,
+      memo: finalMemo,
+      memoTruncated,
     };
   } catch (err) {
     return {

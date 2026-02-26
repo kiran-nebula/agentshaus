@@ -29,7 +29,7 @@ Your job is to execute user intent precisely, communicate clearly, and act respo
   - current epoch state
   - position status
   - wallet balances and estimated spend
-- Keep memos <= 560 characters.
+- Keep memos <= 300 characters.
 - Avoid reckless spend escalation; surface expected cost before high-impact actions.
 
 ## Alpha.haus Context

@@ -29,7 +29,7 @@ const DEFAULT_ONCHAIN_STRATEGY = Strategy.Balanced;
 const DEFAULT_RUNTIME_SKILLS = ['alpha-haus'];
 const MAX_SOUL_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 const MAX_IMAGE_PROMPT_LENGTH = 600;
-const DEFAULT_OPENROUTER_IMAGE_MODEL = 'google/gemini-2.5-flash-image-preview';
+const DEFAULT_OPENROUTER_IMAGE_MODEL = 'google/gemini-2.5-flash-image';
 const DEFAULT_IMAGE_ASPECT_RATIO = '1:1';
 const SUPPORTED_IMAGE_MIME_TYPES = new Set([
   'image/png',

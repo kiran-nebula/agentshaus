@@ -6,6 +6,7 @@ const SOUL_FILE_PATH = path.join(process.cwd(), 'workspace', 'SOUL.md');
 const PERSONALITY_PLACEHOLDER = '{PERSONALITY_PLACEHOLDER}';
 const POSTING_TOPICS_PLACEHOLDER = '{POSTING_TOPICS_PLACEHOLDER}';
 const AUTO_RECLAIM_MEMO_FALLBACK = '[auto-reclaim] Reclaiming TOP ALPHA position';
+const MAX_SAFE_AUTO_RECLAIM_MEMO_LENGTH = Math.min(300, MAX_MEMO_LENGTH);
 const MAX_SOUL_TEXT_LENGTH = 4_000;
 const MAX_STYLE_SNIPPET_LENGTH = 220;
 const MAX_POSTING_TOPICS = 12;
@@ -60,8 +61,8 @@ function trimMemo(input: string): string {
     .replace(/^["'`]+/, '')
     .replace(/["'`]+$/, '');
   if (!normalized) return AUTO_RECLAIM_MEMO_FALLBACK;
-  if (normalized.length <= MAX_MEMO_LENGTH) return normalized;
-  return normalized.slice(0, MAX_MEMO_LENGTH).trim();
+  if (normalized.length <= MAX_SAFE_AUTO_RECLAIM_MEMO_LENGTH) return normalized;
+  return normalized.slice(0, MAX_SAFE_AUTO_RECLAIM_MEMO_LENGTH).trim();
 }
 
 function extractPersonalitySection(soulDocument: string): string {

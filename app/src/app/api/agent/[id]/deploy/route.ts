@@ -25,6 +25,8 @@ const MAX_RUNTIME_CONFIG_LENGTH = 4_000;
 const MAX_RUNTIME_MODEL_LENGTH = 200;
 const MAX_RUNTIME_HOST_LENGTH = 200;
 const MAX_GATEWAY_AUTH_TOKEN_LENGTH = 600;
+const MAX_TELEGRAM_BOT_TOKEN_LENGTH = 700;
+const MAX_TELEGRAM_CHAT_IDS_LENGTH = 2_000;
 const IRONCLAW_LLM_BACKENDS = new Set([
   'nearai',
   'openai',
@@ -183,6 +185,39 @@ function parsePostingTopicsFromEnv(value: unknown): string[] {
   }
 
   return normalizePostingTopics(trimmed.split(/[|,]/));
+}
+
+function normalizeTelegramChatIds(value: unknown): string[] {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[|,\n]/)
+      : [];
+
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of values) {
+    if (typeof entry !== 'string' && typeof entry !== 'number') continue;
+    const normalized = String(entry)
+      .replace(/\r/g, '')
+      .replace(/\u0000/g, '')
+      .trim()
+      .slice(0, 64);
+    if (!normalized) continue;
+    if (!/^-?\d+$/.test(normalized)) continue;
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(normalized);
+  }
+
+  return deduped.slice(0, 24);
+}
+
+function parseTelegramChatIdsFromEnv(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  return normalizeTelegramChatIds(trimmed);
 }
 
 async function deriveExecutorAddress(executorKeypair: string): Promise<string> {
@@ -460,6 +495,9 @@ export async function POST(
       soulText,
       postingTopics,
       grokApiKey,
+      telegramBotToken,
+      telegramAllowedChatIds,
+      telegramModel,
       runtimeProvider: runtimeProviderRaw,
       runtime,
       provider,
@@ -534,6 +572,17 @@ export async function POST(
     const requestedSoulText = normalizeRuntimeSoulText(soulText);
     const requestedPostingTopics = normalizePostingTopics(postingTopics);
     const requestedGrokApiKey = normalizeRuntimeSecret(grokApiKey);
+    const requestedTelegramBotToken = normalizeRuntimeSecret(
+      telegramBotToken,
+      MAX_TELEGRAM_BOT_TOKEN_LENGTH,
+    );
+    const requestedTelegramAllowedChatIds = normalizeTelegramChatIds(
+      telegramAllowedChatIds,
+    );
+    const requestedTelegramModel = normalizeRuntimeSecret(
+      telegramModel,
+      MAX_RUNTIME_MODEL_LENGTH,
+    );
 
     // 3. Check if machine already exists
     const fly = getFlyClient();
@@ -557,6 +606,39 @@ export async function POST(
       requestedPostingTopics.length > 0
         ? requestedPostingTopics
         : existingPostingTopics;
+    const existingTelegramBotToken = normalizeRuntimeSecret(
+      existing?.config?.env?.TELEGRAM_BOT_TOKEN,
+      MAX_TELEGRAM_BOT_TOKEN_LENGTH,
+    );
+    const existingTelegramAllowedChatIds = normalizeTelegramChatIds([
+      ...parseTelegramChatIdsFromEnv(existing?.config?.env?.TELEGRAM_ALLOWED_CHAT_IDS),
+      ...parseTelegramChatIdsFromEnv(existing?.config?.env?.TELEGRAM_CHAT_ID),
+    ]);
+    const existingTelegramModel = normalizeRuntimeSecret(
+      existing?.config?.env?.TELEGRAM_MODEL,
+      MAX_RUNTIME_MODEL_LENGTH,
+    );
+    const envTelegramDefaultChatIds = normalizeTelegramChatIds([
+      ...parseTelegramChatIdsFromEnv(process.env.TELEGRAM_ALLOWED_CHAT_IDS),
+      ...parseTelegramChatIdsFromEnv(process.env.TELEGRAM_CHAT_ID),
+    ]);
+    const runtimeTelegramBotToken =
+      requestedTelegramBotToken ||
+      existingTelegramBotToken ||
+      normalizeRuntimeSecret(
+        process.env.TELEGRAM_BOT_TOKEN,
+        MAX_TELEGRAM_BOT_TOKEN_LENGTH,
+      );
+    const runtimeTelegramAllowedChatIds =
+      requestedTelegramAllowedChatIds.length > 0
+        ? requestedTelegramAllowedChatIds
+        : existingTelegramAllowedChatIds.length > 0
+          ? existingTelegramAllowedChatIds
+          : envTelegramDefaultChatIds;
+    const runtimeTelegramModel =
+      requestedTelegramModel ||
+      existingTelegramModel ||
+      normalizeRuntimeSecret(process.env.TELEGRAM_MODEL, MAX_RUNTIME_MODEL_LENGTH);
     if (existing) {
       if (!force) {
         const existingRuntimeProvider = normalizeRuntimeProvider(
@@ -632,6 +714,17 @@ export async function POST(
         AGENT_MODEL: normalizedModel,
         AGENT_SOUL_TEXT: runtimeSoulText,
         GROK_API_KEY: runtimeGrokApiKey,
+        TELEGRAM_ENABLED: runtimeTelegramBotToken ? 'true' : 'false',
+        TELEGRAM_BOT_TOKEN: runtimeTelegramBotToken,
+        TELEGRAM_ALLOWED_CHAT_IDS:
+          runtimeTelegramAllowedChatIds.length > 0
+            ? runtimeTelegramAllowedChatIds.join(',').slice(0, MAX_TELEGRAM_CHAT_IDS_LENGTH)
+            : '',
+        TELEGRAM_CHAT_ID:
+          runtimeTelegramAllowedChatIds.length > 0
+            ? runtimeTelegramAllowedChatIds[0]
+            : '',
+        TELEGRAM_MODEL: runtimeTelegramModel,
         AGENT_POSTING_TOPICS_JSON:
           runtimePostingTopics.length > 0
             ? JSON.stringify(runtimePostingTopics)
@@ -677,6 +770,12 @@ export async function POST(
         autoReclaim: schedulerAutoReclaim,
       },
       postingTopics: runtimePostingTopics,
+      telegram: {
+        enabled: Boolean(runtimeTelegramBotToken),
+        hasBotToken: Boolean(runtimeTelegramBotToken),
+        allowedChatIds: runtimeTelegramAllowedChatIds,
+        model: runtimeTelegramModel || null,
+      },
     });
   } catch (err) {
     console.error('Deploy error:', err);

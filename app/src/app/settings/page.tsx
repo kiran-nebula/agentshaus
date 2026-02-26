@@ -1,7 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
+import {
+  useCrossAppAccounts,
+  usePrivy,
+  useSolanaWallets,
+  type CrossAppAccountWithMetadata,
+} from '@privy-io/react-auth';
 import { truncateAddress } from '@agents-haus/common';
 import { useTheme } from '@/components/theme-provider';
 import { DEFAULT_THEME } from '@/lib/themes';
@@ -11,6 +16,7 @@ import {
 } from '@/lib/solana-wallet-preference';
 
 const NOTIFICATION_PREFS_KEY = 'agentshaus:notification-prefs';
+const PRIVY_PROVIDER_APP_ID = 'cmgt9s2gk01evl40cj8e3vhwl';
 
 interface NotificationPrefs {
   runtimeAlerts: boolean;
@@ -61,14 +67,24 @@ function ToggleRow({ label, description, enabled, onToggle }: ToggleRowProps) {
 export default function SettingsPage() {
   const { theme, ready, themes, setTheme } = useTheme();
   const { authenticated, login, logout, user } = usePrivy();
+  const { linkCrossAppAccount } = useCrossAppAccounts();
   const { wallets } = useSolanaWallets();
 
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [prefs, setPrefs] = useState<NotificationPrefs>(DEFAULT_NOTIFICATION_PREFS);
   const [copiedEmbeddedWallet, setCopiedEmbeddedWallet] = useState(false);
+  const [linkingProviderAccount, setLinkingProviderAccount] = useState(false);
+  const [providerLinkSuccess, setProviderLinkSuccess] = useState<string | null>(null);
+  const [providerLinkError, setProviderLinkError] = useState<string | null>(null);
 
   const walletAddress = getPreferredSolanaWallet(wallets, user)?.address || user?.wallet?.address || null;
   const embeddedWalletAddress = getEmbeddedSolanaWallet(wallets)?.address || null;
+  const linkedProviderAccount =
+    user?.linkedAccounts?.find(
+      (account): account is CrossAppAccountWithMetadata =>
+        account.type === 'cross_app' && account.providerApp.id === PRIVY_PROVIDER_APP_ID,
+    ) || null;
+  const linkedProviderWalletAddress = linkedProviderAccount?.embeddedWallets?.[0]?.address || null;
 
   useEffect(() => {
     try {
@@ -115,6 +131,26 @@ export default function SettingsPage() {
       setCopiedEmbeddedWallet(true);
     } catch {
       // Ignore clipboard failures silently.
+    }
+  };
+
+  const handleLinkProviderAccount = async () => {
+    if (!authenticated) {
+      login();
+      return;
+    }
+
+    setProviderLinkSuccess(null);
+    setProviderLinkError(null);
+    setLinkingProviderAccount(true);
+
+    try {
+      await linkCrossAppAccount({ appId: PRIVY_PROVIDER_APP_ID });
+      setProviderLinkSuccess('Provider app account linked.');
+    } catch (error) {
+      setProviderLinkError(error instanceof Error ? error.message : 'Failed to link provider app account.');
+    } finally {
+      setLinkingProviderAccount(false);
     }
   };
 
@@ -223,6 +259,49 @@ export default function SettingsPage() {
               <div className="mt-1 text-[11px] text-ink-muted">
                 Send SOL to this address to fund your embedded wallet.
               </div>
+            </div>
+
+            <div className="mt-3 rounded-xl border border-border-light bg-surface px-4 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] uppercase tracking-wide text-ink-muted">Cross-App Wallet Provider</div>
+                {linkedProviderAccount && (
+                  <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
+                    Linked
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 text-[11px] text-ink-muted">
+                {linkedProviderAccount
+                  ? `Connected to ${linkedProviderAccount.providerApp.name || 'provider app'} (${PRIVY_PROVIDER_APP_ID}).`
+                  : 'Link your provider app account to use its embedded wallet in Agents.'}
+              </div>
+              {linkedProviderWalletAddress && (
+                <div className="mt-1 break-all font-mono text-xs text-ink">{linkedProviderWalletAddress}</div>
+              )}
+              <button
+                type="button"
+                onClick={handleLinkProviderAccount}
+                disabled={linkingProviderAccount || !!linkedProviderAccount}
+                className="mt-3 w-full rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-overlay disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {linkedProviderAccount
+                  ? 'Provider App Linked'
+                  : linkingProviderAccount
+                    ? 'Linking Provider App...'
+                    : authenticated
+                      ? 'Link Provider App'
+                      : 'Connect to Link Provider App'}
+              </button>
+              {providerLinkSuccess && (
+                <p className="mt-2 rounded-lg bg-success/10 px-2.5 py-1.5 text-[11px] text-success">
+                  {providerLinkSuccess}
+                </p>
+              )}
+              {providerLinkError && (
+                <p className="mt-2 rounded-lg bg-danger/10 px-2.5 py-1.5 text-[11px] text-danger">
+                  {providerLinkError}
+                </p>
+              )}
             </div>
 
             <button

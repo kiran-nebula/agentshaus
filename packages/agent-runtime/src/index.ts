@@ -14,6 +14,7 @@ import { getRpc, getSoulMint, getAgentStatePda, getExecutorAddress } from './env
 import { startGateway } from './gateway';
 import { loadRuntimeSchedulerConfig, RuntimeScheduler } from './scheduler';
 import { hydrateSoulTemplateFromEnv } from './soul';
+import { loadTelegramBridgeConfigFromEnv, TelegramBridge } from './telegram';
 
 const REQUIRED_ENV_VARS = [
   'SOLANA_RPC_URL',
@@ -120,9 +121,11 @@ async function main() {
     loadRuntimeSchedulerConfig(alphaHausEnabled),
   );
   scheduler.start();
+  const telegramBridge = new TelegramBridge(loadTelegramBridgeConfigFromEnv());
 
   const shutdown = (signal: string) => {
     console.log(`[runtime] received ${signal}, shutting down`);
+    telegramBridge.stop();
     scheduler.stop();
     process.exit(0);
   };
@@ -134,8 +137,10 @@ async function main() {
     getRuntimeStatus: () => ({
       heartbeat: heartbeatStatus,
       scheduler: scheduler.getSnapshot(),
+      telegram: telegramBridge.getSnapshot(),
     }),
   });
+  telegramBridge.start();
 
   console.log('Agent runtime ready.');
 }
