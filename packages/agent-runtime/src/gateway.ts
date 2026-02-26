@@ -38,6 +38,12 @@ const GROK_DEFAULT_MODEL = (
   process.env.GROK_DEFAULT_MODEL ||
   ''
 ).trim();
+const GROK_SEARCH_MODEL = (
+  process.env.GROK_SEARCH_MODEL ||
+  GROK_DEFAULT_MODEL ||
+  ''
+).trim();
+const GROK_RESPONSES_URL = `${GROK_BASE_URL}/responses`;
 const GROK_MODEL_LIST_CACHE_MS = 5 * 60 * 1000;
 const GROK_MODEL_FALLBACKS = [
   'grok-4-fast-reasoning',
@@ -45,6 +51,7 @@ const GROK_MODEL_FALLBACKS = [
   'grok-4',
   'grok-3-mini',
 ];
+const GROK_SEARCH_DEFAULT_MAX_RESULTS = 5;
 const DEFAULT_MODEL = (process.env.AGENT_MODEL || 'moonshotai/kimi-k2.5').trim();
 const AGENT_PROFILE_ID = (process.env.AGENT_PROFILE_ID || 'alpha-hunter').trim();
 const RUNTIME_ROOT = process.cwd();
@@ -314,6 +321,294 @@ async function readUserFileForTool(args: { path?: string; maxBytes?: number }) {
   };
 }
 
+type GrokSearchSource = 'x' | 'web';
+
+interface GrokSearchArgs {
+  query?: string;
+  sources?: GrokSearchSource[] | string;
+  maxResults?: number;
+  fromDate?: string;
+  toDate?: string;
+}
+
+interface GrokSearchCitation {
+  type: string;
+  title?: string;
+  url?: string;
+  source?: string;
+}
+
+interface GrokSearchResult {
+  ok: boolean;
+  query?: string;
+  sources?: GrokSearchSource[];
+  model?: string;
+  text?: string;
+  citations?: GrokSearchCitation[];
+  usage?: unknown;
+  error?: string;
+}
+
+function normalizeGrokSearchSources(value: unknown): GrokSearchSource[] {
+  const defaultSources: GrokSearchSource[] = ['x', 'web'];
+  const candidates: string[] = [];
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (typeof entry === 'string') candidates.push(entry);
+    }
+  } else if (typeof value === 'string') {
+    candidates.push(...value.split(/[|,\s]+/));
+  }
+
+  const deduped: GrokSearchSource[] = [];
+  const seen = new Set<GrokSearchSource>();
+  for (const candidate of candidates) {
+    const normalized = candidate.trim().toLowerCase();
+    const source: GrokSearchSource | null =
+      normalized === 'x'
+        ? 'x'
+        : normalized === 'web'
+          ? 'web'
+          : null;
+    if (!source || seen.has(source)) continue;
+    seen.add(source);
+    deduped.push(source);
+  }
+
+  return deduped.length > 0 ? deduped : defaultSources;
+}
+
+function normalizeGrokSearchDate(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (!normalized) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : null;
+}
+
+function extractApiErrorMessage(payload: unknown, fallback: string): string {
+  if (!payload || typeof payload !== 'object') return fallback;
+  const record = payload as Record<string, unknown>;
+
+  if (typeof record.error === 'string') {
+    return record.error;
+  }
+  if (record.error && typeof record.error === 'object') {
+    const nested = record.error as Record<string, unknown>;
+    if (typeof nested.message === 'string') return nested.message;
+    if (typeof nested.error === 'string') return nested.error;
+  }
+  if (typeof record.message === 'string') {
+    return record.message;
+  }
+  return fallback;
+}
+
+function extractResponsesOutputText(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const record = payload as Record<string, unknown>;
+  if (typeof record.output_text === 'string' && record.output_text.trim()) {
+    return record.output_text.trim();
+  }
+
+  const chunks: string[] = [];
+  const output = record.output;
+  if (!Array.isArray(output)) return '';
+
+  for (const item of output) {
+    if (!item || typeof item !== 'object') continue;
+    const content = (item as Record<string, unknown>).content;
+    if (!Array.isArray(content)) continue;
+
+    for (const contentItem of content) {
+      if (!contentItem || typeof contentItem !== 'object') continue;
+      const contentRecord = contentItem as Record<string, unknown>;
+      const type = typeof contentRecord.type === 'string' ? contentRecord.type : '';
+      const text = typeof contentRecord.text === 'string' ? contentRecord.text.trim() : '';
+      if (!text) continue;
+      if (type === 'output_text' || type === 'text') {
+        chunks.push(text);
+      }
+    }
+  }
+
+  return chunks.join('\n\n').trim();
+}
+
+function extractResponsesCitations(payload: unknown): GrokSearchCitation[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const record = payload as Record<string, unknown>;
+  const output = record.output;
+  if (!Array.isArray(output)) return [];
+
+  const citations: GrokSearchCitation[] = [];
+  const seen = new Set<string>();
+
+  for (const item of output) {
+    if (!item || typeof item !== 'object') continue;
+    const content = (item as Record<string, unknown>).content;
+    if (!Array.isArray(content)) continue;
+
+    for (const contentItem of content) {
+      if (!contentItem || typeof contentItem !== 'object') continue;
+      const annotations = (contentItem as Record<string, unknown>).annotations;
+      if (!Array.isArray(annotations)) continue;
+
+      for (const annotation of annotations) {
+        if (!annotation || typeof annotation !== 'object') continue;
+        const annotationRecord = annotation as Record<string, unknown>;
+        const type =
+          typeof annotationRecord.type === 'string' && annotationRecord.type.trim()
+            ? annotationRecord.type.trim()
+            : 'citation';
+        const title =
+          typeof annotationRecord.title === 'string' && annotationRecord.title.trim()
+            ? annotationRecord.title.trim()
+            : undefined;
+        const source =
+          typeof annotationRecord.source === 'string' && annotationRecord.source.trim()
+            ? annotationRecord.source.trim()
+            : undefined;
+        const url =
+          typeof annotationRecord.url === 'string' && annotationRecord.url.trim()
+            ? annotationRecord.url.trim()
+            : typeof annotationRecord.post_url === 'string' &&
+                annotationRecord.post_url.trim()
+              ? annotationRecord.post_url.trim()
+              : typeof annotationRecord.source_url === 'string' &&
+                  annotationRecord.source_url.trim()
+                ? annotationRecord.source_url.trim()
+                : undefined;
+
+        const key = `${type}|${title || ''}|${url || ''}|${source || ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        citations.push({
+          type,
+          ...(title ? { title } : {}),
+          ...(url ? { url } : {}),
+          ...(source ? { source } : {}),
+        });
+        if (citations.length >= 12) return citations;
+      }
+    }
+  }
+
+  return citations;
+}
+
+function buildGrokSearchTools(
+  sources: GrokSearchSource[],
+  maxResults: number,
+  fromDate: string | null,
+  toDate: string | null,
+): Array<Record<string, unknown>> {
+  const tools: Array<Record<string, unknown>> = [];
+
+  for (const source of sources) {
+    if (source === 'x') {
+      const xSearchTool: Record<string, unknown> = {
+        type: 'x_search',
+        max_results: maxResults,
+      };
+      if (fromDate) xSearchTool.from_date = fromDate;
+      if (toDate) xSearchTool.to_date = toDate;
+      tools.push(xSearchTool);
+      continue;
+    }
+
+    tools.push({ type: 'web_search' });
+  }
+
+  return tools;
+}
+
+async function grokSearch(args: GrokSearchArgs): Promise<GrokSearchResult> {
+  if (!GROK_API_KEY) {
+    return { ok: false, error: 'GROK_API_KEY is not configured' };
+  }
+
+  const query = typeof args.query === 'string' ? args.query.trim() : '';
+  if (!query) {
+    return { ok: false, error: 'query is required' };
+  }
+
+  const sources = normalizeGrokSearchSources(args.sources);
+  const maxResults = clampInteger(
+    typeof args.maxResults === 'number' && Number.isFinite(args.maxResults)
+      ? args.maxResults
+      : GROK_SEARCH_DEFAULT_MAX_RESULTS,
+    1,
+    20,
+  );
+  const fromDate = normalizeGrokSearchDate(args.fromDate);
+  const toDate = normalizeGrokSearchDate(args.toDate);
+
+  const payload: Record<string, unknown> = {
+    model: GROK_SEARCH_MODEL || (await resolveGrokModel('default')),
+    input: query,
+    tools: buildGrokSearchTools(sources, maxResults, fromDate, toDate),
+  };
+
+  try {
+    const response = await fetch(GROK_RESPONSES_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${GROK_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const rawText = await response.text();
+      let errorPayload: unknown = null;
+      try {
+        errorPayload = JSON.parse(rawText);
+      } catch {
+        errorPayload = null;
+      }
+      const fallback = rawText.trim() || `xAI API error (${response.status})`;
+      return {
+        ok: false,
+        query,
+        sources,
+        error: `xAI API error (${response.status}): ${extractApiErrorMessage(
+          errorPayload,
+          fallback,
+        )}`,
+      };
+    }
+
+    const data = (await response.json().catch(() => null)) as
+      | Record<string, unknown>
+      | null;
+    const text = extractResponsesOutputText(data);
+    const citations = extractResponsesCitations(data);
+    const model =
+      data && typeof data.model === 'string' && data.model.trim()
+        ? data.model.trim()
+        : (payload.model as string);
+
+    return {
+      ok: true,
+      query,
+      sources,
+      model,
+      text: text || '(no textual response)',
+      ...(citations.length > 0 ? { citations } : {}),
+      ...(data && 'usage' in data ? { usage: data.usage } : {}),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      query,
+      sources,
+      error: err instanceof Error ? err.message : 'Failed to call xAI Responses API',
+    };
+  }
+}
+
 function buildSystemPrompt(): string {
   const sections: string[] = [];
 
@@ -409,6 +704,7 @@ function buildSystemPrompt(): string {
         '## Grok Writer Style',
         '- Tone: sharp, technical, and witty without being reckless.',
         '- Prefer concrete examples, market context, and clear calls-to-action.',
+        '- Use grok_search for real-time X/web information when freshness matters.',
       ].join('\n'),
     );
   }
@@ -552,6 +848,48 @@ function buildToolDefinitions(): ToolDefinition[] {
     });
   }
 
+  if (ENABLE_GROK_WRITER && GROK_API_KEY) {
+    definitions.push({
+      type: 'function',
+      function: {
+        name: 'grok_search',
+        description:
+          'Run live xAI search over X and/or the web to fetch real-time information.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Search query or question to resolve.',
+            },
+            sources: {
+              type: 'array',
+              items: { type: 'string', enum: ['x', 'web'] },
+              description:
+                "Optional source filters. Defaults to both ['x', 'web'].",
+            },
+            maxResults: {
+              type: 'number',
+              description:
+                'X search max results (1-20). Defaults to 5.',
+            },
+            fromDate: {
+              type: 'string',
+              description:
+                'Optional lower bound for X results in YYYY-MM-DD.',
+            },
+            toDate: {
+              type: 'string',
+              description:
+                'Optional upper bound for X results in YYYY-MM-DD.',
+            },
+          },
+          required: ['query'],
+        },
+      },
+    });
+  }
+
   definitions.push(
     {
       type: 'function',
@@ -624,6 +962,11 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
   ...(ENABLE_X_POSTING
     ? {
         post_to_x: (args: any) => postToX(args),
+      }
+    : {}),
+  ...(ENABLE_GROK_WRITER && GROK_API_KEY
+    ? {
+        grok_search: (args: GrokSearchArgs) => grokSearch(args || {}),
       }
     : {}),
   list_user_files: (args: { path?: string; depth?: number }) =>
