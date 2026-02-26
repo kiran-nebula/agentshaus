@@ -8,6 +8,7 @@ import {
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getBearerTokenFromAuthorizationHeader,
+  getWalletOwnerUserId,
   PrivyConfigurationError,
   verifyPrivyAccessToken,
   verifyPrivyIdentityToken,
@@ -41,12 +42,15 @@ export type AgentOwnershipAuthResult =
 /**
  * Verify that the request comes from the current owner of the Soul NFT.
  *
- * Fast path (parallelized):
- *   1. verifyPrivyAccessToken (local JWT verify, ~100ms)
- *   2. In parallel:
- *      a. fetchCurrentSoulOwner (1 RPC call)
- *      b. verifyPrivyIdentityToken (1 Privy call → wallet addresses)
+ * Fast path (with identity token, parallelized ~3-5s):
+ *   1. verifyPrivyAccessToken (local JWT verify)
+ *   2. In parallel: fetchCurrentSoulOwner + verifyPrivyIdentityToken
  *   3. Check if on-chain owner ∈ identity token wallets
+ *
+ * Fallback path (without identity token, ~5-10s):
+ *   1. verifyPrivyAccessToken (local JWT verify)
+ *   2. In parallel: fetchCurrentSoulOwner + getWalletOwnerUserId
+ *   3. Check if wallet owner userId === JWT userId
  */
 export async function requireAgentOwnership(
   request: NextRequest,
@@ -79,7 +83,7 @@ export async function requireAgentOwnership(
     return { ok: false, response: unauthorized('invalid-bearer-token') };
   }
 
-  // Step 2: Run on-chain lookup and identity token verification in parallel
+  // Step 2: Get identity token (if available)
   const idTokenHeader = request.headers.get('x-privy-identity-token');
   const idTokenCookie =
     request.cookies.get('privy-id-token')?.value ||
@@ -87,50 +91,32 @@ export async function requireAgentOwnership(
     '';
   const idToken = idTokenHeader?.trim() || idTokenCookie.trim() || null;
 
-  if (!idToken) {
-    console.warn(`[auth] no identity token provided, cannot verify ownership quickly`);
-    return {
-      ok: false,
-      response: NextResponse.json(
-        {
-          error: 'Identity token required for ownership verification',
-          authHint: 'missing-identity-token',
-        },
-        { status: 401 },
-      ),
-    };
+  if (idToken) {
+    // Fast path: parallel on-chain + identity token
+    return verifyWithIdentityToken(userId, soulMint, idToken, t0);
   }
 
+  // Fallback: parallel on-chain + wallet→user reverse lookup
+  console.log(`[auth] no identity token, using wallet reverse lookup`);
+  return verifyWithWalletLookup(userId, soulMint, t0);
+}
+
+async function verifyWithIdentityToken(
+  userId: string,
+  soulMint: string,
+  idToken: string,
+  t0: number,
+): Promise<AgentOwnershipAuthResult> {
   const t1 = Date.now();
   const [ownerResult, identityResult] = await Promise.allSettled([
     fetchCurrentSoulOwner(getRpc(), soulMint as Address),
     verifyPrivyIdentityToken(idToken),
   ]);
-  console.log(`[auth] parallel lookups took ${Date.now() - t1}ms`);
+  console.log(`[auth] parallel lookups (idToken) took ${Date.now() - t1}ms`);
 
-  // Check on-chain owner
-  if (ownerResult.status === 'rejected') {
-    console.error(`[auth] fetchCurrentSoulOwner failed:`, ownerResult.reason);
-    return {
-      ok: false,
-      response: NextResponse.json(
-        { error: 'Failed to verify Soul ownership', authHint: 'owner-lookup-failed' },
-        { status: 500 },
-      ),
-    };
-  }
-  const ownerWallet = ownerResult.value as string | null;
-  if (!ownerWallet) {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        { error: 'Soul NFT not found', authHint: 'soul-not-found' },
-        { status: 404 },
-      ),
-    };
-  }
+  const ownerWallet = resolveOwnerWallet(ownerResult);
+  if (typeof ownerWallet !== 'string') return ownerWallet; // error response
 
-  // Check identity token wallets
   if (identityResult.status === 'rejected') {
     console.error(`[auth] verifyPrivyIdentityToken failed:`, identityResult.reason);
     if (identityResult.reason instanceof PrivyConfigurationError) {
@@ -154,18 +140,61 @@ export async function requireAgentOwnership(
   const { userId: tokenUserId, walletAddresses } = identityResult.value;
   console.log(`[auth] owner=${ownerWallet.slice(0, 8)}..., tokenUser=${tokenUserId.slice(0, 12)}..., wallets=${walletAddresses.size}`);
 
-  // Verify the token belongs to the same user
   if (tokenUserId !== userId) {
     console.warn(`[auth] userId mismatch: jwt=${userId}, idToken=${tokenUserId}`);
+    return { ok: false, response: unauthorized('user-id-mismatch') };
+  }
+
+  if (!walletAddresses.has(ownerWallet)) {
+    return ownershipDenied(ownerWallet, walletAddresses, t0);
+  }
+
+  console.log(`[auth] ownership verified (idToken path) in ${Date.now() - t0}ms`);
+  return { ok: true, userId, ownerWallet };
+}
+
+async function verifyWithWalletLookup(
+  userId: string,
+  soulMint: string,
+  t0: number,
+): Promise<AgentOwnershipAuthResult> {
+  const t1 = Date.now();
+  const [ownerResult, walletOwnerResult] = await Promise.allSettled([
+    fetchCurrentSoulOwner(getRpc(), soulMint as Address).then(async (owner) => {
+      if (!owner) return { owner: null, walletOwnerUserId: null };
+      const walletOwnerUserId = await getWalletOwnerUserId(owner as string);
+      return { owner: owner as string, walletOwnerUserId };
+    }),
+    // No-op placeholder to keep the allSettled pattern — the real work is chained above.
+    Promise.resolve(null),
+  ]);
+  console.log(`[auth] sequential lookups (wallet) took ${Date.now() - t1}ms`);
+
+  if (ownerResult.status === 'rejected') {
+    console.error(`[auth] owner+wallet lookup failed:`, ownerResult.reason);
     return {
       ok: false,
-      response: unauthorized('user-id-mismatch'),
+      response: NextResponse.json(
+        { error: 'Failed to verify Soul ownership', authHint: 'owner-lookup-failed' },
+        { status: 500 },
+      ),
     };
   }
 
-  // Check if on-chain owner wallet is linked to this user
-  if (!walletAddresses.has(ownerWallet)) {
-    console.warn(`[auth] ownership denied: owner ${ownerWallet.slice(0, 8)}... not in wallets [${[...walletAddresses].map(a => a.slice(0, 8) + '...').join(', ')}], totalTime=${Date.now() - t0}ms`);
+  const { owner: ownerWallet, walletOwnerUserId } = ownerResult.value;
+  if (!ownerWallet) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Soul NFT not found', authHint: 'soul-not-found' },
+        { status: 404 },
+      ),
+    };
+  }
+
+  console.log(`[auth] owner=${ownerWallet.slice(0, 8)}..., walletOwner=${walletOwnerUserId?.slice(0, 12) || 'null'}`);
+
+  if (!walletOwnerUserId || walletOwnerUserId !== userId) {
     return {
       ok: false,
       response: NextResponse.json(
@@ -179,6 +208,51 @@ export async function requireAgentOwnership(
     };
   }
 
-  console.log(`[auth] ownership verified in ${Date.now() - t0}ms`);
+  console.log(`[auth] ownership verified (wallet lookup path) in ${Date.now() - t0}ms`);
   return { ok: true, userId, ownerWallet };
+}
+
+function resolveOwnerWallet(
+  result: PromiseSettledResult<unknown>,
+): string | AgentOwnershipAuthResult {
+  if (result.status === 'rejected') {
+    console.error(`[auth] fetchCurrentSoulOwner failed:`, result.reason);
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Failed to verify Soul ownership', authHint: 'owner-lookup-failed' },
+        { status: 500 },
+      ),
+    };
+  }
+  const ownerWallet = result.value as string | null;
+  if (!ownerWallet) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Soul NFT not found', authHint: 'soul-not-found' },
+        { status: 404 },
+      ),
+    };
+  }
+  return ownerWallet;
+}
+
+function ownershipDenied(
+  ownerWallet: string,
+  walletAddresses: Set<string>,
+  t0: number,
+): AgentOwnershipAuthResult {
+  console.warn(`[auth] ownership denied: owner ${ownerWallet.slice(0, 8)}... not in wallets [${[...walletAddresses].map(a => a.slice(0, 8) + '...').join(', ')}], totalTime=${Date.now() - t0}ms`);
+  return {
+    ok: false,
+    response: NextResponse.json(
+      {
+        error: 'Forbidden: current user is not the Soul NFT owner',
+        authHint: 'owner-wallet-not-linked',
+        currentOwner: ownerWallet,
+      },
+      { status: 403 },
+    ),
+  };
 }

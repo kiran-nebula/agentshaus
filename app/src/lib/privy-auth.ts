@@ -81,6 +81,26 @@ export async function verifyPrivyIdentityToken(idToken: string): Promise<{
   };
 }
 
+/**
+ * Quick wallet→userId lookup via getUserByWalletAddress.
+ * Returns the Privy userId that owns this wallet, or null.
+ */
+export async function getWalletOwnerUserId(
+  walletAddress: string,
+): Promise<string | null> {
+  const cached = getCachedWalletOwner(walletAddress);
+  if (cached !== undefined) return cached;
+
+  try {
+    const user = await getPrivyClient().getUserByWalletAddress(walletAddress);
+    const ownerId = extractUserId(user);
+    setCachedWalletOwner(walletAddress, ownerId);
+    return ownerId;
+  } catch {
+    return null;
+  }
+}
+
 function getOwnershipCacheKey(userId: string, walletAddress: string): string {
   return `${userId}:${walletAddress}`;
 }
