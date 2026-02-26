@@ -257,18 +257,20 @@ function describeFileRoots() {
   }));
 }
 
-async function listUserFilesForTool(args: {
+async function listFilesForTool(args: {
   path?: string;
   depth?: number;
+  root?: string;
 }) {
-  await ensureUserFilesRoot();
+  const rootKey = parseFileRoot(args.root ?? null);
+  if (rootKey === 'user') await ensureUserFilesRoot();
 
   const requestedDepth =
     typeof args.depth === 'number' && Number.isFinite(args.depth)
       ? args.depth
       : 2;
   const depth = clampInteger(requestedDepth, 1, 4);
-  const resolved = resolvePathWithinRoot('user', args.path);
+  const resolved = resolvePathWithinRoot(rootKey, args.path);
   const tree = await buildFileTreeNode(
     resolved.rootPath,
     resolved.absolutePath,
@@ -276,21 +278,22 @@ async function listUserFilesForTool(args: {
   );
 
   return {
-    root: 'user',
+    root: rootKey,
     rootPath: resolved.rootPath,
     requestedPath: resolved.relativePath,
     tree,
   };
 }
 
-async function readUserFileForTool(args: { path?: string; maxBytes?: number }) {
+async function readFileForTool(args: { path?: string; maxBytes?: number; root?: string }) {
   if (!args.path || typeof args.path !== 'string' || !args.path.trim()) {
     throw new Error('path is required');
   }
 
-  await ensureUserFilesRoot();
+  const rootKey = parseFileRoot(args.root ?? null);
+  if (rootKey === 'user') await ensureUserFilesRoot();
 
-  const resolved = resolvePathWithinRoot('user', args.path);
+  const resolved = resolvePathWithinRoot(rootKey, args.path);
   const metadata = await stat(resolved.absolutePath);
   if (metadata.isDirectory()) {
     throw new Error('path points to a directory');
@@ -326,10 +329,11 @@ const MAX_TEXT_WRITE_BYTES = Number.parseInt(
   10,
 );
 
-async function writeUserFileForTool(args: {
+async function writeFileForTool(args: {
   path?: string;
   content?: string;
   append?: boolean;
+  root?: string;
 }) {
   if (!args.path || typeof args.path !== 'string' || !args.path.trim()) {
     throw new Error('path is required');
@@ -338,9 +342,10 @@ async function writeUserFileForTool(args: {
     throw new Error('content is required and must be a string');
   }
 
-  await ensureUserFilesRoot();
+  const rootKey = parseFileRoot(args.root ?? null);
+  if (rootKey === 'user') await ensureUserFilesRoot();
 
-  const resolved = resolvePathWithinRoot('user', args.path);
+  const resolved = resolvePathWithinRoot(rootKey, args.path);
 
   // Ensure parent directory exists
   const parentDir = path.dirname(resolved.absolutePath);
@@ -678,12 +683,14 @@ function buildSystemPrompt(): string {
   sections.push(
     [
       '## Files',
-      '- Your persistent workspace is at workspace/user-files on this machine.',
-      '- Use list_user_files to inspect available files/folders.',
-      '- Use read_user_file to read text files from workspace/user-files.',
-      '- Use write_user_file to create or update files (soul.md, memories, notes, drafts, etc.).',
-      '- Files persist across conversations for this agent. Use them to remember context, store bio/soul text, keep logs, and save drafts.',
-      '- Recommended files: soul.md (identity/personality), memories/ (conversation learnings), drafts/ (post drafts).',
+      '- You have two file roots: "user" (workspace/user-files) for your own data, and "workspace" (workspace/) for system config like SOUL.md.',
+      '- SOUL.md is your identity document at workspace/SOUL.md. Read it with read_user_file({path:"SOUL.md", root:"workspace"}) to understand your personality and role.',
+      '- Use list_user_files to inspect files. Add root="workspace" to browse the workspace root.',
+      '- Use read_user_file to read text files. Add root="workspace" for workspace files.',
+      '- Use write_user_file to create or update files. Add root="workspace" to write workspace files like SOUL.md.',
+      '- At the start of each conversation, read SOUL.md to load your identity context.',
+      '- Files persist across conversations. Use workspace/user-files for memories, notes, drafts, and custom data.',
+      '- Recommended user files: memories/ (conversation learnings), drafts/ (post drafts), notes/ (research).',
       '- Do not claim to have read a file unless read_user_file returned it.',
     ].join('\n'),
   );
@@ -775,7 +782,20 @@ function buildSystemPrompt(): string {
   return sections.join('\n\n');
 }
 
-const SYSTEM_PROMPT = buildSystemPrompt();
+const BASE_SYSTEM_PROMPT = buildSystemPrompt();
+
+async function getSystemPromptWithSoul(): Promise<string> {
+  try {
+    const soulPath = path.join(WORKSPACE_ROOT, 'SOUL.md');
+    const soulContent = await readFile(soulPath, 'utf8');
+    if (soulContent.trim()) {
+      return `${BASE_SYSTEM_PROMPT}\n\n## Your Identity (SOUL.md)\nBelow is your identity document. Use it to guide your tone, personality, and behavior.\n\n${soulContent.trim()}`;
+    }
+  } catch {
+    // SOUL.md doesn't exist or isn't readable — continue without it.
+  }
+  return BASE_SYSTEM_PROMPT;
+}
 
 function buildToolDefinitions(): ToolDefinition[] {
   const definitions: ToolDefinition[] = [];
@@ -948,18 +968,24 @@ function buildToolDefinitions(): ToolDefinition[] {
       function: {
         name: 'list_user_files',
         description:
-          'List files and directories under workspace/user-files for this agent runtime.',
+          'List files and directories. Defaults to workspace/user-files (root="user"). Set root="workspace" to browse the workspace root (contains SOUL.md and other config).',
         parameters: {
           type: 'object',
           properties: {
             path: {
               type: 'string',
               description:
-                "Relative path under workspace/user-files. Defaults to root '.'",
+                "Relative path under the selected root. Defaults to '.'",
             },
             depth: {
               type: 'number',
               description: 'Directory recursion depth (1-4). Defaults to 2.',
+            },
+            root: {
+              type: 'string',
+              enum: ['user', 'workspace'],
+              description:
+                'File root to browse. "user" = workspace/user-files (default), "workspace" = workspace/ (contains SOUL.md).',
             },
           },
           required: [],
@@ -971,18 +997,24 @@ function buildToolDefinitions(): ToolDefinition[] {
       function: {
         name: 'read_user_file',
         description:
-          'Read a UTF-8 text file from workspace/user-files. Use list_user_files first to find paths.',
+          'Read a UTF-8 text file. Defaults to workspace/user-files (root="user"). Set root="workspace" to read workspace files like SOUL.md.',
         parameters: {
           type: 'object',
           properties: {
             path: {
               type: 'string',
-              description: 'Relative file path under workspace/user-files.',
+              description: 'Relative file path under the selected root.',
             },
             maxBytes: {
               type: 'number',
               description:
                 `Maximum bytes to read (256-${MAX_TEXT_READ_BYTES}). Defaults to ${MAX_TEXT_READ_BYTES}.`,
+            },
+            root: {
+              type: 'string',
+              enum: ['user', 'workspace'],
+              description:
+                'File root. "user" = workspace/user-files (default), "workspace" = workspace/ (contains SOUL.md).',
             },
           },
           required: ['path'],
@@ -994,13 +1026,13 @@ function buildToolDefinitions(): ToolDefinition[] {
       function: {
         name: 'write_user_file',
         description:
-          'Write or append UTF-8 text to a file in workspace/user-files. Creates parent directories as needed. Use for saving memories, notes, soul text, or any persistent data.',
+          'Write or append UTF-8 text to a file. Defaults to workspace/user-files (root="user"). Set root="workspace" to write workspace files like SOUL.md. Creates parent directories as needed.',
         parameters: {
           type: 'object',
           properties: {
             path: {
               type: 'string',
-              description: 'Relative file path under workspace/user-files (e.g. "soul.md", "memories/log.md").',
+              description: 'Relative file path under the selected root (e.g. "soul.md", "memories/log.md", or "SOUL.md" with root="workspace").',
             },
             content: {
               type: 'string',
@@ -1009,6 +1041,12 @@ function buildToolDefinitions(): ToolDefinition[] {
             append: {
               type: 'boolean',
               description: 'If true, append to file instead of overwriting. Defaults to false.',
+            },
+            root: {
+              type: 'string',
+              enum: ['user', 'workspace'],
+              description:
+                'File root. "user" = workspace/user-files (default), "workspace" = workspace/ (for SOUL.md etc.).',
             },
           },
           required: ['path', 'content'],
@@ -1047,12 +1085,12 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
         grok_search: (args: GrokSearchArgs) => grokSearch(args || {}),
       }
     : {}),
-  list_user_files: (args: { path?: string; depth?: number }) =>
-    listUserFilesForTool(args || {}),
-  read_user_file: (args: { path?: string; maxBytes?: number }) =>
-    readUserFileForTool(args || {}),
-  write_user_file: (args: { path?: string; content?: string; append?: boolean }) =>
-    writeUserFileForTool(args || {}),
+  list_user_files: (args: { path?: string; depth?: number; root?: string }) =>
+    listFilesForTool(args || {}),
+  read_user_file: (args: { path?: string; maxBytes?: number; root?: string }) =>
+    readFileForTool(args || {}),
+  write_user_file: (args: { path?: string; content?: string; append?: boolean; root?: string }) =>
+    writeFileForTool(args || {}),
 };
 
 const MUTATING_TOOLS = new Set([
@@ -1305,8 +1343,9 @@ async function chatCompletion(
       ? await resolveGrokModel(requestedModel)
       : resolveOpenRouterModel(requestedModel);
   let retriedGrokModel = false;
+  const systemPrompt = await getSystemPromptWithSoul();
   const fullMessages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt },
     ...messages,
   ];
 
