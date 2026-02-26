@@ -28,6 +28,9 @@ const DEFAULT_PROFILE_ID = 'balanced';
 const DEFAULT_ONCHAIN_STRATEGY = Strategy.Balanced;
 const DEFAULT_RUNTIME_SKILLS = ['alpha-haus'];
 const MAX_SOUL_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGE_PROMPT_LENGTH = 600;
+const DEFAULT_OPENROUTER_IMAGE_MODEL = 'google/gemini-2.5-flash-image-preview';
+const DEFAULT_IMAGE_ASPECT_RATIO = '1:1';
 const SUPPORTED_IMAGE_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -129,6 +132,30 @@ async function uploadSoulImage(file: File): Promise<string> {
   return imageUrl;
 }
 
+async function generateSoulImage(args: {
+  prompt: string;
+  model: string;
+  aspectRatio?: string;
+}): Promise<string> {
+  const response = await fetch('/api/agent/image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt: args.prompt,
+      model: args.model,
+      aspectRatio: args.aspectRatio,
+    }),
+  });
+  const payload = await response.json().catch(() => null);
+  const imageUrl = payload && typeof payload.url === 'string' ? payload.url.trim() : '';
+
+  if (!response.ok || !imageUrl) {
+    throw new Error(payload?.error || 'Failed to generate Soul NFT image');
+  }
+
+  return imageUrl;
+}
+
 function normalizeTopic(value: string): string {
   return value.replace(/\s+/g, ' ').trim().slice(0, MAX_TOPIC_LENGTH);
 }
@@ -154,6 +181,10 @@ export function CreateAgentForm() {
   const [loadedSkillsFromQuery, setLoadedSkillsFromQuery] = useState(false);
   const [soulImageFile, setSoulImageFile] = useState<File | null>(null);
   const [soulImagePreviewUrl, setSoulImagePreviewUrl] = useState<string | null>(null);
+  const [generatedSoulImageUrl, setGeneratedSoulImageUrl] = useState<string | null>(null);
+  const [soulImagePrompt, setSoulImagePrompt] = useState('');
+  const [soulImageModel, setSoulImageModel] = useState(DEFAULT_OPENROUTER_IMAGE_MODEL);
+  const [isGeneratingSoulImage, setIsGeneratingSoulImage] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<'idle' | 'uploading' | 'minting' | 'deploying' | 'done'>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -169,6 +200,8 @@ export function CreateAgentForm() {
     ]),
   );
   const canAddMoreTopics = postingTopics.length < MAX_POSTING_TOPICS;
+  const selectedSoulImageUrl = soulImagePreviewUrl || generatedSoulImageUrl;
+  const hasSoulImage = Boolean(soulImageFile || generatedSoulImageUrl);
 
   useEffect(() => {
     if (loadedSkillsFromQuery) return;
@@ -226,6 +259,7 @@ export function CreateAgentForm() {
     if (!file) {
       setSoulImageFile(null);
       setSoulImagePreviewUrl(null);
+      setGeneratedSoulImageUrl(null);
       setError(null);
       return;
     }
@@ -234,6 +268,7 @@ export function CreateAgentForm() {
       setError('Soul NFT image must be PNG, JPG, GIF, or WebP');
       setSoulImageFile(null);
       setSoulImagePreviewUrl(null);
+      setGeneratedSoulImageUrl(null);
       return;
     }
 
@@ -241,12 +276,45 @@ export function CreateAgentForm() {
       setError('Soul NFT image must be 5MB or smaller');
       setSoulImageFile(null);
       setSoulImagePreviewUrl(null);
+      setGeneratedSoulImageUrl(null);
       return;
     }
 
     setError(null);
     setSoulImageFile(file);
+    setGeneratedSoulImageUrl(null);
     setSoulImagePreviewUrl(URL.createObjectURL(file));
+  };
+
+  const handleGenerateSoulImage = async () => {
+    const prompt = soulImagePrompt.trim();
+    if (!prompt) {
+      setError('Enter an image prompt before generating');
+      return;
+    }
+
+    setIsGeneratingSoulImage(true);
+    setError(null);
+
+    try {
+      const generatedUrl = await generateSoulImage({
+        prompt,
+        model: soulImageModel.trim() || DEFAULT_OPENROUTER_IMAGE_MODEL,
+        aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+      });
+      if (soulImagePreviewUrl) {
+        URL.revokeObjectURL(soulImagePreviewUrl);
+      }
+      setSoulImageFile(null);
+      setSoulImagePreviewUrl(null);
+      setGeneratedSoulImageUrl(generatedUrl);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to generate Soul NFT image',
+      );
+    } finally {
+      setIsGeneratingSoulImage(false);
+    }
   };
 
   const handleNext = () => {
@@ -340,7 +408,7 @@ export function CreateAgentForm() {
       const soulAssetAddress = await getAddressFromPublicKey(soulAssetKeypair.publicKey);
 
       // 2. Upload custom Soul image first so metadata points to a stable URL at mint time.
-      let uploadedImageUrl: string | null = null;
+      let uploadedImageUrl: string | null = generatedSoulImageUrl;
       if (soulImageFile) {
         uploadedImageUrl = await uploadSoulImage(soulImageFile);
       }
@@ -598,7 +666,7 @@ export function CreateAgentForm() {
             <div>
               <div className="mb-2 flex items-center justify-between">
                 <label className="block text-sm font-medium text-ink">Soul NFT Image (optional)</label>
-                {soulImageFile && (
+                {hasSoulImage && (
                   <button
                     type="button"
                     onClick={() => handleSoulImageSelection(null)}
@@ -608,6 +676,43 @@ export function CreateAgentForm() {
                   </button>
                 )}
               </div>
+              <div className="rounded-xl border border-border-light bg-surface-raised px-4 py-3">
+                <label className="mb-1.5 block text-xs font-medium text-ink-muted">
+                  AI image prompt
+                </label>
+                <textarea
+                  value={soulImagePrompt}
+                  onChange={(e) =>
+                    setSoulImagePrompt(e.target.value.slice(0, MAX_IMAGE_PROMPT_LENGTH))
+                  }
+                  rows={2}
+                  placeholder="e.g. Minimalist neon wolf avatar, cinematic, centered portrait, high detail"
+                  className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none resize-none"
+                />
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                  <input
+                    type="text"
+                    value={soulImageModel}
+                    onChange={(e) => setSoulImageModel(e.target.value)}
+                    placeholder={DEFAULT_OPENROUTER_IMAGE_MODEL}
+                    className="w-full rounded-xl border border-border bg-surface px-3 py-2 text-xs text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none sm:flex-1"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleGenerateSoulImage}
+                    disabled={isGeneratingSoulImage || !soulImagePrompt.trim()}
+                    className="rounded-full bg-ink px-4 py-2 text-xs font-medium text-surface transition-colors hover:bg-ink/90 disabled:opacity-50"
+                  >
+                    {isGeneratingSoulImage ? 'Generating...' : 'Generate with OpenRouter'}
+                  </button>
+                </div>
+                <p className="mt-1.5 text-xs text-ink-muted">
+                  Uses your project&apos;s OpenRouter key and stores the generated image in Blob for stable NFT metadata.
+                </p>
+              </div>
+
+              <div className="my-2 text-center text-xs text-ink-muted">or upload manually</div>
+
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp,image/gif"
@@ -617,10 +722,10 @@ export function CreateAgentForm() {
               <p className="mt-1.5 text-xs text-ink-muted">
                 PNG, JPG, GIF, or WebP up to 5MB. Uploaded before mint and included in NFT metadata.
               </p>
-              {soulImagePreviewUrl && (
+              {selectedSoulImageUrl && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={soulImagePreviewUrl}
+                  src={selectedSoulImageUrl}
                   alt="Soul NFT preview"
                   className="mt-3 h-40 w-40 rounded-xl border border-border-light object-cover"
                 />
@@ -850,10 +955,10 @@ export function CreateAgentForm() {
           )}
           <div className="space-y-2">
             <div className="text-sm text-ink-muted">Soul NFT Image</div>
-            {soulImagePreviewUrl ? (
+            {selectedSoulImageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={soulImagePreviewUrl}
+                src={selectedSoulImageUrl}
                 alt="Soul NFT preview"
                 className="h-40 w-40 rounded-xl border border-border-light object-cover"
               />
@@ -875,7 +980,7 @@ export function CreateAgentForm() {
       <div className="flex justify-between pt-2">
         <button
           onClick={handleBack}
-          disabled={stepIndex === 0 || isSubmitting}
+          disabled={stepIndex === 0 || isSubmitting || isGeneratingSoulImage}
           className="rounded-full border border-border px-5 py-2 text-sm font-medium text-ink-secondary hover:bg-surface-overlay disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         >
           Back
@@ -883,7 +988,7 @@ export function CreateAgentForm() {
         {step === 'mint' ? (
           <button
             onClick={handleSubmit}
-            disabled={isSubmitting}
+            disabled={isSubmitting || isGeneratingSoulImage}
             className="rounded-full bg-brand-500 px-6 py-2 text-sm font-semibold text-white hover:bg-brand-600 transition-colors disabled:opacity-50"
           >
             {submitPhase === 'uploading'
@@ -897,7 +1002,8 @@ export function CreateAgentForm() {
         ) : (
           <button
             onClick={handleNext}
-            className="rounded-full bg-ink px-6 py-2 text-sm font-medium text-surface hover:bg-ink/90 transition-colors"
+            disabled={isGeneratingSoulImage}
+            className="rounded-full bg-ink px-6 py-2 text-sm font-medium text-surface hover:bg-ink/90 transition-colors disabled:opacity-50"
           >
             {step === 'identity' ? 'Continue to Topics' : 'Continue to Mint'}
           </button>
@@ -937,9 +1043,9 @@ export function CreateAgentForm() {
             <div className="space-y-3">
               <div className="rounded-xl border border-border-light bg-surface p-4">
                 <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-ink-muted">Step 1</div>
-                <div className="text-sm font-medium text-ink">Set identity and upload Soul image</div>
+                <div className="text-sm font-medium text-ink">Set identity and add a Soul image</div>
                 <p className="mt-1 text-sm text-ink-secondary">
-                  Name your bot, define personality, and optionally upload a custom Soul NFT image.
+                  Name your bot, define personality, and optionally generate or upload a custom Soul NFT image.
                 </p>
               </div>
 
