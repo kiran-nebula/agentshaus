@@ -11,7 +11,7 @@ import {
 } from '@/lib/runtime-provider';
 import { requireAgentOwnership } from '@/lib/agent-ownership-auth';
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 let rpc: Rpc<SolanaRpcApi> | null = null;
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';

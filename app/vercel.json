@@ -1,5 +1,16 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "cd .. && pnpm install",
-  "buildCommand": "cd .. && pnpm turbo run build --filter=@agents-haus/app..."
+  "buildCommand": "cd .. && pnpm turbo run build --filter=@agents-haus/app...",
+  "functions": {
+    "src/app/api/agent/[id]/deploy/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/agent/[id]/machine/start/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/agent/[id]/machine/stop/route.ts": {
+      "maxDuration": 60
+    }
+  }
 }
