@@ -65,9 +65,9 @@ export class FlyMachinesClient {
     cpus?: number;
     memoryMb?: number;
   }): Promise<FlyMachine> {
-    // Explicitly request launch on create. Recent Fly API behavior can default
-    // new machines to `created` (not runnable via /start) unless skip_launch is false.
-    return this.request<FlyMachine>('/machines?skip_launch=false', {
+    // Use skip_launch=true so createMachine returns quickly (~2-3s).
+    // The caller should follow up with startMachine() to boot the container.
+    return this.request<FlyMachine>('/machines?skip_launch=true', {
       method: 'POST',
       timeoutMs: FLY_CREATE_TIMEOUT_MS,
       body: JSON.stringify({

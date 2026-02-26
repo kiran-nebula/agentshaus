@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { after } from 'next/server';
 import { randomBytes } from 'node:crypto';
 import { createSolanaRpc, createKeyPairFromBytes, getAddressFromPublicKey } from '@solana/kit';
 import type { Address, Rpc, SolanaRpcApi } from '@solana/kit';
@@ -250,7 +251,7 @@ function getSharedExecutorKeypair(): string {
 async function waitForAgentState(
   connection: Rpc<SolanaRpcApi>,
   soulMint: Address,
-  maxAttempts = 6,
+  maxAttempts = 2,
 ): Promise<Awaited<ReturnType<typeof fetchAgentState>>> {
   const [agentStateAddr] = await getAgentStatePda(soulMint);
 
@@ -258,7 +259,7 @@ async function waitForAgentState(
     const state = await fetchAgentState(connection, agentStateAddr);
     if (state) return state;
     if (attempt < maxAttempts - 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
 
@@ -673,15 +674,11 @@ export async function POST(
       // force=true: destroy existing machine first
       console.log(`Destroying existing machine ${existing.id} (force redeploy)`);
       try {
-        // Stop first if running, then destroy
+        // Stop first if running, then force-destroy
         if (existing.state === 'started' || existing.state === 'starting') {
           await fly.stopMachine(existing.id);
-          // Wait a moment for stop to complete
-          await new Promise((r) => setTimeout(r, 3000));
         }
         await fly.destroyMachine(existing.id, true);
-        // Wait for destroy to propagate
-        await new Promise((r) => setTimeout(r, 2000));
       } catch (destroyErr) {
         console.error('Failed to destroy existing machine:', destroyErr);
         return NextResponse.json(
@@ -759,19 +756,24 @@ export async function POST(
     console.log(`[deploy] createMachine took ${Date.now() - t3}ms, id=${machine.id}, state=${machine.state}`);
     console.log(`[deploy] total elapsed ${Date.now() - t0}ms`);
 
-    let machineState = machine.state;
-    if (machineState !== 'started' && machineState !== 'starting') {
+    // Start the machine in the background via after() so we can respond immediately.
+    // The client polls GET /machine and will see the machine transition to 'started'.
+    const machineId = machine.id;
+    after(async () => {
       try {
-        await fly.startMachine(machine.id);
-        machineState = 'starting';
+        console.log(`[deploy:after] starting machine ${machineId}`);
+        const t4 = Date.now();
+        await fly.startMachine(machineId);
+        console.log(`[deploy:after] startMachine took ${Date.now() - t4}ms`);
       } catch (startErr) {
-        console.warn(
-          `[deploy] Machine ${machine.id} created in state=${machine.state}; auto-start failed: ${
-            startErr instanceof Error ? startErr.message : 'unknown error'
-          }`,
+        console.error(
+          `[deploy:after] startMachine failed for ${machineId}:`,
+          startErr instanceof Error ? startErr.message : startErr,
         );
       }
-    }
+    });
+
+    const machineState = 'starting';
 
     return NextResponse.json({
       machineId: machine.id,
