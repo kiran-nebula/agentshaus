@@ -10,6 +10,16 @@ const OWNERSHIP_CACHE_TTL_MS = Number.parseInt(
 );
 const OWNERSHIP_CACHE_MAX_ENTRIES = 2000;
 
+/** Wrap a promise with a hard timeout via Promise.race */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`[privy] ${label} timed out after ${ms}ms`)), ms),
+    ),
+  ]);
+}
+
 export class PrivyConfigurationError extends Error {
   constructor(message: string) {
     super(message);
@@ -62,7 +72,11 @@ export function getBearerTokenFromAuthorizationHeader(
 }
 
 export async function verifyPrivyAccessToken(token: string): Promise<string> {
-  const claims = await getPrivyClient().verifyAuthToken(token);
+  const claims = await withTimeout(
+    getPrivyClient().verifyAuthToken(token),
+    PRIVY_API_TIMEOUT_MS,
+    'verifyAuthToken',
+  );
   return claims.userId;
 }
 
@@ -70,7 +84,11 @@ export async function verifyPrivyIdentityToken(idToken: string): Promise<{
   userId: string;
   walletAddresses: Set<string>;
 }> {
-  const user = await getPrivyClient().getUser({ idToken });
+  const user = await withTimeout(
+    getPrivyClient().getUser({ idToken }),
+    PRIVY_API_TIMEOUT_MS,
+    'getUser(idToken)',
+  );
   const userId = extractUserId(user);
   if (!userId) {
     throw new Error('Identity token user is missing an id');
@@ -92,7 +110,11 @@ export async function getWalletOwnerUserId(
   if (cached !== undefined) return cached;
 
   try {
-    const user = await getPrivyClient().getUserByWalletAddress(walletAddress);
+    const user = await withTimeout(
+      getPrivyClient().getUserByWalletAddress(walletAddress),
+      PRIVY_API_TIMEOUT_MS,
+      'getUserByWalletAddress',
+    );
     const ownerId = extractUserId(user);
     setCachedWalletOwner(walletAddress, ownerId);
     return ownerId;
@@ -111,7 +133,11 @@ export async function getUserLinkedWallets(
   const cached = getCachedUserWallets(userId);
   if (cached) return cached;
 
-  const user = await getPrivyClient().getUser(userId);
+  const user = await withTimeout(
+    getPrivyClient().getUser(userId),
+    PRIVY_API_TIMEOUT_MS,
+    'getUser(userId)',
+  );
   const wallets = extractWalletAddresses(user);
   setCachedUserWallets(userId, wallets);
   return wallets;
@@ -251,7 +277,11 @@ export async function isWalletLinkedToPrivyUser(
     try {
       const tIdToken = Date.now();
       // Prefer claims from the session token to avoid rate-limited user lookups.
-      const tokenUser = await getPrivyClient().getUser({ idToken });
+      const tokenUser = await withTimeout(
+        getPrivyClient().getUser({ idToken }),
+        PRIVY_API_TIMEOUT_MS,
+        'getUser(idToken)',
+      );
       const tokenUserId = extractUserId(tokenUser);
       const tokenUserMatches = !tokenUserId || tokenUserId === userId;
 
@@ -288,7 +318,11 @@ export async function isWalletLinkedToPrivyUser(
 
   try {
     const tByWallet = Date.now();
-    const userByWallet = await getPrivyClient().getUserByWalletAddress(requestedWallet);
+    const userByWallet = await withTimeout(
+      getPrivyClient().getUserByWalletAddress(requestedWallet),
+      PRIVY_API_TIMEOUT_MS,
+      'getUserByWalletAddress',
+    );
     console.log(`[privy] getUserByWalletAddress took ${Date.now() - tByWallet}ms`);
     const ownerId = extractUserId(userByWallet);
     if (ownerId) {
@@ -308,9 +342,13 @@ export async function isWalletLinkedToPrivyUser(
 
   try {
     const tBulk = Date.now();
-    const usersByWallet = await getPrivyClient().getUsers({
-      walletAddresses: [requestedWallet],
-    });
+    const usersByWallet = await withTimeout(
+      getPrivyClient().getUsers({
+        walletAddresses: [requestedWallet],
+      }),
+      PRIVY_API_TIMEOUT_MS,
+      'getUsers(walletAddresses)',
+    );
     console.log(`[privy] getUsers(walletAddresses) took ${Date.now() - tBulk}ms, count=${Array.isArray(usersByWallet) ? usersByWallet.length : '?'}`);
     const ownerId =
       Array.isArray(usersByWallet) && usersByWallet.length > 0
@@ -347,7 +385,11 @@ export async function isWalletLinkedToPrivyUser(
   let user: unknown;
   try {
     const tUser = Date.now();
-    user = await getPrivyClient().getUser(userId);
+    user = await withTimeout(
+      getPrivyClient().getUser(userId),
+      PRIVY_API_TIMEOUT_MS,
+      'getUser(userId)',
+    );
     console.log(`[privy] getUser(userId) took ${Date.now() - tUser}ms`);
   } catch (err) {
     const status = getErrorStatus(err);
