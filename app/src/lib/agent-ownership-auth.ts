@@ -8,7 +8,7 @@ import {
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getBearerTokenFromAuthorizationHeader,
-  getWalletOwnerUserId,
+  getUserLinkedWallets,
   PrivyConfigurationError,
   verifyPrivyAccessToken,
   verifyPrivyIdentityToken,
@@ -159,56 +159,44 @@ async function verifyWithWalletLookup(
   t0: number,
 ): Promise<AgentOwnershipAuthResult> {
   const t1 = Date.now();
-  const [ownerResult, walletOwnerResult] = await Promise.allSettled([
-    fetchCurrentSoulOwner(getRpc(), soulMint as Address).then(async (owner) => {
-      if (!owner) return { owner: null, walletOwnerUserId: null };
-      const walletOwnerUserId = await getWalletOwnerUserId(owner as string);
-      return { owner: owner as string, walletOwnerUserId };
-    }),
-    // No-op placeholder to keep the allSettled pattern — the real work is chained above.
-    Promise.resolve(null),
+  // Run on-chain owner lookup and user's linked wallets lookup in parallel
+  const [ownerResult, walletsResult] = await Promise.allSettled([
+    fetchCurrentSoulOwner(getRpc(), soulMint as Address),
+    getUserLinkedWallets(userId),
   ]);
-  console.log(`[auth] sequential lookups (wallet) took ${Date.now() - t1}ms`);
+  console.log(`[auth] parallel lookups (walletFallback) took ${Date.now() - t1}ms`);
 
-  if (ownerResult.status === 'rejected') {
-    console.error(`[auth] owner+wallet lookup failed:`, ownerResult.reason);
+  const ownerWallet = resolveOwnerWallet(ownerResult);
+  if (typeof ownerWallet !== 'string') return ownerWallet; // error response
+
+  if (walletsResult.status === 'rejected') {
+    console.error(`[auth] getUserLinkedWallets failed:`, walletsResult.reason);
+    if (walletsResult.reason instanceof PrivyConfigurationError) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: walletsResult.reason.message, authHint: 'privy-server-auth-not-configured' },
+          { status: 500 },
+        ),
+      };
+    }
     return {
       ok: false,
       response: NextResponse.json(
-        { error: 'Failed to verify Soul ownership', authHint: 'owner-lookup-failed' },
+        { error: 'Failed to verify wallet ownership', authHint: 'wallet-lookup-failed' },
         { status: 500 },
       ),
     };
   }
 
-  const { owner: ownerWallet, walletOwnerUserId } = ownerResult.value;
-  if (!ownerWallet) {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        { error: 'Soul NFT not found', authHint: 'soul-not-found' },
-        { status: 404 },
-      ),
-    };
+  const walletAddresses = walletsResult.value;
+  console.log(`[auth] owner=${ownerWallet.slice(0, 8)}..., userWallets=${walletAddresses.size}`);
+
+  if (!walletAddresses.has(ownerWallet)) {
+    return ownershipDenied(ownerWallet, walletAddresses, t0);
   }
 
-  console.log(`[auth] owner=${ownerWallet.slice(0, 8)}..., walletOwner=${walletOwnerUserId?.slice(0, 12) || 'null'}`);
-
-  if (!walletOwnerUserId || walletOwnerUserId !== userId) {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        {
-          error: 'Forbidden: current user is not the Soul NFT owner',
-          authHint: 'owner-wallet-not-linked',
-          currentOwner: ownerWallet,
-        },
-        { status: 403 },
-      ),
-    };
-  }
-
-  console.log(`[auth] ownership verified (wallet lookup path) in ${Date.now() - t0}ms`);
+  console.log(`[auth] ownership verified (wallet fallback path) in ${Date.now() - t0}ms`);
   return { ok: true, userId, ownerWallet };
 }
 

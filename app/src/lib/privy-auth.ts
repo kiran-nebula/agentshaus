@@ -101,6 +101,22 @@ export async function getWalletOwnerUserId(
   }
 }
 
+/**
+ * Get all wallet addresses linked to a Privy user.
+ * Uses getUser(userId) which returns all linked accounts.
+ */
+export async function getUserLinkedWallets(
+  userId: string,
+): Promise<Set<string>> {
+  const cached = getCachedUserWallets(userId);
+  if (cached) return cached;
+
+  const user = await getPrivyClient().getUser(userId);
+  const wallets = extractWalletAddresses(user);
+  setCachedUserWallets(userId, wallets);
+  return wallets;
+}
+
 function getOwnershipCacheKey(userId: string, walletAddress: string): string {
   return `${userId}:${walletAddress}`;
 }
