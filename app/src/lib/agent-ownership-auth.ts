@@ -8,10 +8,9 @@ import {
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getBearerTokenFromAuthorizationHeader,
-  getUserLinkedWallets,
+  isWalletLinkedToPrivyUser,
   PrivyConfigurationError,
   verifyPrivyAccessToken,
-  verifyPrivyIdentityToken,
 } from '@/lib/privy-auth';
 
 let rpc: Rpc<SolanaRpcApi> | null = null;
@@ -42,15 +41,8 @@ export type AgentOwnershipAuthResult =
 /**
  * Verify that the request comes from the current owner of the Soul NFT.
  *
- * Fast path (with identity token, parallelized ~3-5s):
- *   1. verifyPrivyAccessToken (local JWT verify)
- *   2. In parallel: fetchCurrentSoulOwner + verifyPrivyIdentityToken
- *   3. Check if on-chain owner ∈ identity token wallets
- *
- * Fallback path (without identity token, ~5-10s):
- *   1. verifyPrivyAccessToken (local JWT verify)
- *   2. In parallel: fetchCurrentSoulOwner + getWalletOwnerUserId
- *   3. Check if wallet owner userId === JWT userId
+ * 1. In parallel: verifyPrivyAccessToken + fetchCurrentSoulOwner
+ * 2. isWalletLinkedToPrivyUser (with idToken fast-path + fallbacks)
  */
 export async function requireAgentOwnership(
   request: NextRequest,
@@ -64,12 +56,17 @@ export async function requireAgentOwnership(
     return { ok: false, response: unauthorized('missing-bearer-token') };
   }
 
-  // Step 1: Verify JWT (fast, uses cached keys)
-  let userId: string;
-  try {
-    userId = await verifyPrivyAccessToken(bearer);
-    console.log(`[auth] verifyAccessToken took ${Date.now() - t0}ms`);
-  } catch (err) {
+  // Step 1: Run JWT verify and on-chain owner lookup in parallel
+  const t1 = Date.now();
+  const [authResult, ownerResult] = await Promise.allSettled([
+    verifyPrivyAccessToken(bearer),
+    fetchCurrentSoulOwner(getRpc(), soulMint as Address),
+  ]);
+  console.log(`[auth] parallel verify+owner took ${Date.now() - t1}ms`);
+
+  // Check JWT result
+  if (authResult.status === 'rejected') {
+    const err = authResult.reason;
     console.error(`[auth] verifyAccessToken failed after ${Date.now() - t0}ms:`, err instanceof Error ? err.message : err);
     if (err instanceof PrivyConfigurationError) {
       return {
@@ -82,129 +79,11 @@ export async function requireAgentOwnership(
     }
     return { ok: false, response: unauthorized('invalid-bearer-token') };
   }
+  const userId = authResult.value;
 
-  // Step 2: Get identity token (if available)
-  const idTokenHeader = request.headers.get('x-privy-identity-token');
-  const idTokenCookie =
-    request.cookies.get('privy-id-token')?.value ||
-    request.cookies.get('__privy-id-token')?.value ||
-    '';
-  const idToken = idTokenHeader?.trim() || idTokenCookie.trim() || null;
-
-  if (idToken) {
-    // Fast path: parallel on-chain + identity token
-    return verifyWithIdentityToken(userId, soulMint, idToken, t0);
-  }
-
-  // Fallback: parallel on-chain + wallet→user reverse lookup
-  console.log(`[auth] no identity token, using wallet reverse lookup`);
-  return verifyWithWalletLookup(userId, soulMint, t0);
-}
-
-async function verifyWithIdentityToken(
-  userId: string,
-  soulMint: string,
-  idToken: string,
-  t0: number,
-): Promise<AgentOwnershipAuthResult> {
-  const t1 = Date.now();
-  const [ownerResult, identityResult] = await Promise.allSettled([
-    fetchCurrentSoulOwner(getRpc(), soulMint as Address),
-    verifyPrivyIdentityToken(idToken),
-  ]);
-  console.log(`[auth] parallel lookups (idToken) took ${Date.now() - t1}ms`);
-
-  const ownerWallet = resolveOwnerWallet(ownerResult);
-  if (typeof ownerWallet !== 'string') return ownerWallet; // error response
-
-  if (identityResult.status === 'rejected') {
-    console.error(`[auth] verifyPrivyIdentityToken failed:`, identityResult.reason);
-    if (identityResult.reason instanceof PrivyConfigurationError) {
-      return {
-        ok: false,
-        response: NextResponse.json(
-          { error: identityResult.reason.message, authHint: 'privy-server-auth-not-configured' },
-          { status: 500 },
-        ),
-      };
-    }
-    return {
-      ok: false,
-      response: NextResponse.json(
-        { error: 'Failed to verify identity', authHint: 'identity-verification-failed' },
-        { status: 500 },
-      ),
-    };
-  }
-
-  const { userId: tokenUserId, walletAddresses } = identityResult.value;
-  console.log(`[auth] owner=${ownerWallet.slice(0, 8)}..., tokenUser=${tokenUserId.slice(0, 12)}..., wallets=${walletAddresses.size}`);
-
-  if (tokenUserId !== userId) {
-    console.warn(`[auth] userId mismatch: jwt=${userId}, idToken=${tokenUserId}`);
-    return { ok: false, response: unauthorized('user-id-mismatch') };
-  }
-
-  if (!walletAddresses.has(ownerWallet)) {
-    return ownershipDenied(ownerWallet, walletAddresses, t0);
-  }
-
-  console.log(`[auth] ownership verified (idToken path) in ${Date.now() - t0}ms`);
-  return { ok: true, userId, ownerWallet };
-}
-
-async function verifyWithWalletLookup(
-  userId: string,
-  soulMint: string,
-  t0: number,
-): Promise<AgentOwnershipAuthResult> {
-  const t1 = Date.now();
-  // Run on-chain owner lookup and user's linked wallets lookup in parallel
-  const [ownerResult, walletsResult] = await Promise.allSettled([
-    fetchCurrentSoulOwner(getRpc(), soulMint as Address),
-    getUserLinkedWallets(userId),
-  ]);
-  console.log(`[auth] parallel lookups (walletFallback) took ${Date.now() - t1}ms`);
-
-  const ownerWallet = resolveOwnerWallet(ownerResult);
-  if (typeof ownerWallet !== 'string') return ownerWallet; // error response
-
-  if (walletsResult.status === 'rejected') {
-    console.error(`[auth] getUserLinkedWallets failed:`, walletsResult.reason);
-    if (walletsResult.reason instanceof PrivyConfigurationError) {
-      return {
-        ok: false,
-        response: NextResponse.json(
-          { error: walletsResult.reason.message, authHint: 'privy-server-auth-not-configured' },
-          { status: 500 },
-        ),
-      };
-    }
-    return {
-      ok: false,
-      response: NextResponse.json(
-        { error: 'Failed to verify wallet ownership', authHint: 'wallet-lookup-failed' },
-        { status: 500 },
-      ),
-    };
-  }
-
-  const walletAddresses = walletsResult.value;
-  console.log(`[auth] owner=${ownerWallet.slice(0, 8)}..., userWallets=${walletAddresses.size}`);
-
-  if (!walletAddresses.has(ownerWallet)) {
-    return ownershipDenied(ownerWallet, walletAddresses, t0);
-  }
-
-  console.log(`[auth] ownership verified (wallet fallback path) in ${Date.now() - t0}ms`);
-  return { ok: true, userId, ownerWallet };
-}
-
-function resolveOwnerWallet(
-  result: PromiseSettledResult<unknown>,
-): string | AgentOwnershipAuthResult {
-  if (result.status === 'rejected') {
-    console.error(`[auth] fetchCurrentSoulOwner failed:`, result.reason);
+  // Check on-chain owner result
+  if (ownerResult.status === 'rejected') {
+    console.error(`[auth] fetchCurrentSoulOwner failed after ${Date.now() - t0}ms:`, ownerResult.reason);
     return {
       ok: false,
       response: NextResponse.json(
@@ -213,7 +92,7 @@ function resolveOwnerWallet(
       ),
     };
   }
-  const ownerWallet = result.value as string | null;
+  const ownerWallet = ownerResult.value as string | null;
   if (!ownerWallet) {
     return {
       ok: false,
@@ -223,24 +102,59 @@ function resolveOwnerWallet(
       ),
     };
   }
-  return ownerWallet;
-}
 
-function ownershipDenied(
-  ownerWallet: string,
-  walletAddresses: Set<string>,
-  t0: number,
-): AgentOwnershipAuthResult {
-  console.warn(`[auth] ownership denied: owner ${ownerWallet.slice(0, 8)}... not in wallets [${[...walletAddresses].map(a => a.slice(0, 8) + '...').join(', ')}], totalTime=${Date.now() - t0}ms`);
-  return {
-    ok: false,
-    response: NextResponse.json(
-      {
-        error: 'Forbidden: current user is not the Soul NFT owner',
-        authHint: 'owner-wallet-not-linked',
-        currentOwner: ownerWallet,
-      },
-      { status: 403 },
-    ),
-  };
+  // Step 2: Check wallet linking (uses idToken fast-path + multiple fallbacks)
+  try {
+    const t2 = Date.now();
+    const idTokenHeader = request.headers.get('x-privy-identity-token');
+    const idTokenCookie =
+      request.cookies.get('privy-id-token')?.value ||
+      request.cookies.get('__privy-id-token')?.value ||
+      '';
+    const idToken = idTokenHeader?.trim() || idTokenCookie.trim() || null;
+    console.log(`[auth] checking wallet link: userId=${userId.slice(0, 12)}..., owner=${ownerWallet.slice(0, 8)}..., hasIdToken=${!!idToken}`);
+    const ownsSoul = await isWalletLinkedToPrivyUser(userId, ownerWallet, {
+      idToken,
+    });
+    console.log(`[auth] isWalletLinkedToPrivyUser took ${Date.now() - t2}ms, result=${ownsSoul}`);
+    if (!ownsSoul) {
+      const hasIdentityToken = Boolean(idToken?.trim());
+      const authHint = hasIdentityToken
+        ? 'identity-token-present-but-owner-wallet-not-linked'
+        : 'owner-wallet-not-linked';
+      console.warn(`[auth] ownership denied: authHint=${authHint}, totalTime=${Date.now() - t0}ms`);
+      return {
+        ok: false,
+        response: NextResponse.json(
+          {
+            error: 'Forbidden: current user is not the Soul NFT owner',
+            authHint,
+            currentOwner: ownerWallet,
+          },
+          { status: 403 },
+        ),
+      };
+    }
+  } catch (err) {
+    if (err instanceof PrivyConfigurationError) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: err.message, authHint: 'privy-server-auth-not-configured' },
+          { status: 500 },
+        ),
+      };
+    }
+    console.error(`[auth] Privy ownership check failed after ${Date.now() - t0}ms:`, err);
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Failed to verify ownership', authHint: 'ownership-check-failed' },
+        { status: 500 },
+      ),
+    };
+  }
+
+  console.log(`[auth] ownership verified in ${Date.now() - t0}ms`);
+  return { ok: true, userId, ownerWallet };
 }
