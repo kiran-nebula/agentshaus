@@ -4,6 +4,8 @@
  */
 
 const FLY_API_BASE = 'https://api.machines.dev/v1';
+const FLY_DEFAULT_TIMEOUT_MS = 30_000;
+const FLY_CREATE_TIMEOUT_MS = 55_000;
 
 export interface FlyMachine {
   id: string;
@@ -32,13 +34,16 @@ export class FlyMachinesClient {
     private appName: string,
   ) {}
 
-  private async request<T = any>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T = any>(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
+    const timeoutMs = init?.timeoutMs ?? FLY_DEFAULT_TIMEOUT_MS;
+    const { timeoutMs: _, ...fetchInit } = init ?? {};
     const res = await fetch(`${FLY_API_BASE}/apps/${this.appName}${path}`, {
-      ...init,
+      ...fetchInit,
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         Authorization: `Bearer ${this.token}`,
         'Content-Type': 'application/json',
-        ...init?.headers,
+        ...fetchInit?.headers,
       },
     });
 
@@ -64,6 +69,7 @@ export class FlyMachinesClient {
     // new machines to `created` (not runnable via /start) unless skip_launch is false.
     return this.request<FlyMachine>('/machines?skip_launch=false', {
       method: 'POST',
+      timeoutMs: FLY_CREATE_TIMEOUT_MS,
       body: JSON.stringify({
         name: opts.name,
         region: opts.region || 'iad',

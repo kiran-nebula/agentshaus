@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { DEFAULT_LLM_MODELS } from '@agents-haus/common';
+import { useIdentityToken, usePrivy } from '@privy-io/react-auth';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -21,6 +22,8 @@ function clampChatMessages(messages: Message[]): Message[] {
 }
 
 export function AgentChat({ soulMint, isRunning }: AgentChatProps) {
+  const { authenticated, login, getAccessToken } = usePrivy();
+  const { identityToken } = useIdentityToken();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -58,6 +61,10 @@ export function AgentChat({ soulMint, isRunning }: AgentChatProps) {
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
+    if (!authenticated) {
+      login();
+      return;
+    }
 
     const userMessage = input.trim();
     const history = clampChatMessages(messages);
@@ -72,9 +79,20 @@ export function AgentChat({ soulMint, isRunning }: AgentChatProps) {
     setLoading(true);
 
     try {
+      const accessToken = await getAccessToken();
+      if (!accessToken) {
+        throw new Error('Wallet session expired. Reconnect and try again.');
+      }
+      const authHeaders: Record<string, string> = {
+        Authorization: `Bearer ${accessToken}`,
+      };
+      if (identityToken) {
+        authHeaders['X-Privy-Identity-Token'] = identityToken;
+      }
+
       const res = await fetch(`/api/agent/${soulMint}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({
           message: userMessage,
           history,

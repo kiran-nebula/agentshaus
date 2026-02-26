@@ -16,6 +16,7 @@ interface PrivyLinkedAccountLike {
 }
 
 interface PrivyUserLike {
+  wallet?: { address?: string | null } | null;
   linkedAccounts?: readonly PrivyLinkedAccountLike[] | null;
 }
 
@@ -108,6 +109,14 @@ function isPrivyEmailLoginUser(user: PrivyUserLike | null | undefined): boolean 
   );
 }
 
+function getPrimaryPrivyWalletAddress(
+  user: PrivyUserLike | null | undefined,
+): string | null {
+  const address =
+    typeof user?.wallet?.address === 'string' ? user.wallet.address.trim() : '';
+  return address || null;
+}
+
 /**
  * Privy email logins should use embedded wallets. All other users should use external wallets.
  */
@@ -116,6 +125,14 @@ export function getPreferredSolanaWallet<T extends SolanaWalletLike>(
   user?: PrivyUserLike | null,
 ): T | undefined {
   if (!wallets || wallets.length === 0) return undefined;
+
+  const primaryWalletAddress = getPrimaryPrivyWalletAddress(user);
+  if (primaryWalletAddress) {
+    const primaryWallet = wallets.find(
+      (wallet) => wallet.address === primaryWalletAddress,
+    );
+    if (primaryWallet) return primaryWallet;
+  }
 
   const embeddedWallet = getEmbeddedSolanaWallet(wallets);
   const externalWallet = getExternalSolanaWallet(wallets);

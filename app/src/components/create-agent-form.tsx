@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { usePrivy } from '@privy-io/react-auth';
+import { useIdentityToken, usePrivy } from '@privy-io/react-auth';
 import { generateKeyPair, getAddressFromPublicKey } from '@solana/kit';
 import {
   SOLANA_SKILL_PACKS,
@@ -163,7 +163,8 @@ function normalizeTopic(value: string): string {
 export function CreateAgentForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { authenticated, login } = usePrivy();
+  const { authenticated, login, getAccessToken } = usePrivy();
+  const { identityToken } = useIdentityToken();
   const { createAgent } = useAgentTransactions();
   const { sendTransaction } = useSendTransaction();
 
@@ -471,11 +472,21 @@ export function CreateAgentForm() {
         JSON.stringify(postingTopics),
       );
       setSubmitPhase('deploying');
+      const accessToken = await getAccessToken();
+      if (!accessToken) {
+        throw new Error('Wallet session expired. Reconnect and try again.');
+      }
+      const runtimeAuthHeaders: Record<string, string> = {
+        Authorization: `Bearer ${accessToken}`,
+      };
+      if (identityToken) {
+        runtimeAuthHeaders['X-Privy-Identity-Token'] = identityToken;
+      }
 
       try {
         const deployRes = await fetch(`/api/agent/${soulAssetAddress}/deploy`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...runtimeAuthHeaders },
           body: JSON.stringify({
               force: true,
               profileId: DEFAULT_PROFILE_ID,
@@ -497,7 +508,10 @@ export function CreateAgentForm() {
               ? deployData.state
               : null;
           if (deployState && deployState !== 'started' && deployState !== 'starting') {
-            await fetch(`/api/agent/${soulAssetAddress}/machine/start`, { method: 'POST' });
+            await fetch(`/api/agent/${soulAssetAddress}/machine/start`, {
+              method: 'POST',
+              headers: runtimeAuthHeaders,
+            });
           }
         } else {
           const deployErr = await deployRes.json().catch(() => null);

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DEFAULT_LLM_MODELS } from '@agents-haus/common';
 import { getFlyClient } from '@/lib/fly-machines';
+import { requireAgentOwnership } from '@/lib/agent-ownership-auth';
 import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
 
 type CronChatCommand =
@@ -1085,6 +1086,11 @@ export async function POST(
 ) {
   try {
     const { id: soulMint } = await params;
+    const ownership = await requireAgentOwnership(request, soulMint);
+    if (!ownership.ok) {
+      return ownership.response;
+    }
+
     const body = await request.json();
     const { message, history, model } = body;
     const requestedModel =

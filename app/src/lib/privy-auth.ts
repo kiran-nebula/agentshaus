@@ -198,23 +198,29 @@ export async function isWalletLinkedToPrivyUser(
     idToken?: string | null;
   },
 ): Promise<boolean> {
+  const t0 = Date.now();
   const requestedWallet = walletAddress.trim();
   if (!requestedWallet) return false;
 
   const cacheKey = getOwnershipCacheKey(userId, requestedWallet);
-  if (isOwnershipCacheHit(cacheKey)) return true;
+  if (isOwnershipCacheHit(cacheKey)) {
+    console.log(`[privy] ownership cache hit in ${Date.now() - t0}ms`);
+    return true;
+  }
 
   const idToken = options?.idToken?.trim() || '';
   let tokenLinkedWallets: Set<string> | null = null;
 
   if (idToken) {
     try {
+      const tIdToken = Date.now();
       // Prefer claims from the session token to avoid rate-limited user lookups.
       const tokenUser = await getPrivyClient().getUser({ idToken });
       const tokenUserId = extractUserId(tokenUser);
       const tokenUserMatches = !tokenUserId || tokenUserId === userId;
 
       tokenLinkedWallets = extractWalletAddresses(tokenUser);
+      console.log(`[privy] getUser(idToken) took ${Date.now() - tIdToken}ms, wallets=${tokenLinkedWallets.size}, userMatch=${tokenUserMatches}`);
       if (tokenLinkedWallets.size > 0) {
         if (tokenUserMatches) {
           setCachedUserWallets(userId, tokenLinkedWallets);
@@ -226,9 +232,12 @@ export async function isWalletLinkedToPrivyUser(
           setOwnershipCache(cacheKey);
           setCachedWalletOwner(requestedWallet, userId);
         }
+        console.log(`[privy] wallet found via idToken in ${Date.now() - t0}ms`);
         return true;
       }
-    } catch {
+      console.log(`[privy] idToken wallets [${[...tokenLinkedWallets].map(a => a.slice(0, 8) + '...').join(', ')}] do not include ${requestedWallet.slice(0, 8)}...`);
+    } catch (err) {
+      console.warn(`[privy] getUser(idToken) failed after ${Date.now() - t0}ms:`, err instanceof Error ? err.message : err);
       // Fall back to API lookups below.
     }
   }
@@ -237,22 +246,54 @@ export async function isWalletLinkedToPrivyUser(
   if (cachedWalletOwner !== undefined) {
     const matches = cachedWalletOwner === userId;
     if (matches) setOwnershipCache(cacheKey);
+    console.log(`[privy] wallet owner cache: matches=${matches}, total=${Date.now() - t0}ms`);
     return matches;
   }
 
   try {
+    const tByWallet = Date.now();
     const userByWallet = await getPrivyClient().getUserByWalletAddress(requestedWallet);
+    console.log(`[privy] getUserByWalletAddress took ${Date.now() - tByWallet}ms`);
     const ownerId = extractUserId(userByWallet);
+    if (ownerId) {
+      setCachedWalletOwner(requestedWallet, ownerId);
+      const matches = ownerId === userId;
+      if (matches) setOwnershipCache(cacheKey);
+      console.log(`[privy] getUserByWalletAddress matched: ${matches}, total=${Date.now() - t0}ms`);
+      return matches;
+    }
+  } catch (err) {
+    const status = getErrorStatus(err);
+    console.warn(`[privy] getUserByWalletAddress failed (status=${status}) after ${Date.now() - t0}ms:`, err instanceof Error ? err.message : err);
+    if (status !== 404) {
+      // Fallback below for transient lookup failures.
+    }
+  }
+
+  try {
+    const tBulk = Date.now();
+    const usersByWallet = await getPrivyClient().getUsers({
+      walletAddresses: [requestedWallet],
+    });
+    console.log(`[privy] getUsers(walletAddresses) took ${Date.now() - tBulk}ms, count=${Array.isArray(usersByWallet) ? usersByWallet.length : '?'}`);
+    const ownerId =
+      Array.isArray(usersByWallet) && usersByWallet.length > 0
+        ? extractUserId(usersByWallet[0])
+        : null;
     if (ownerId) {
       setCachedWalletOwner(requestedWallet, ownerId);
       const matches = ownerId === userId;
       if (matches) setOwnershipCache(cacheKey);
       return matches;
     }
+    if (Array.isArray(usersByWallet) && usersByWallet.length === 0) {
+      setCachedWalletOwner(requestedWallet, null);
+    }
   } catch (err) {
     const status = getErrorStatus(err);
-    if (status !== 404) {
-      // Fallback below for transient lookup failures.
+    console.warn(`[privy] getUsers(walletAddresses) failed (status=${status}) after ${Date.now() - t0}ms:`, err instanceof Error ? err.message : err);
+    if (status !== 404 && status !== 429) {
+      // Continue with user-level lookup below.
     }
   }
 
@@ -263,18 +304,18 @@ export async function isWalletLinkedToPrivyUser(
       setOwnershipCache(cacheKey);
       setCachedWalletOwner(requestedWallet, userId);
     }
+    console.log(`[privy] user wallet cache: matches=${matches}, total=${Date.now() - t0}ms`);
     return matches;
-  }
-
-  if (tokenLinkedWallets && tokenLinkedWallets.size > 0) {
-    return false;
   }
 
   let user: unknown;
   try {
+    const tUser = Date.now();
     user = await getPrivyClient().getUser(userId);
+    console.log(`[privy] getUser(userId) took ${Date.now() - tUser}ms`);
   } catch (err) {
     const status = getErrorStatus(err);
+    console.warn(`[privy] getUser(userId) failed (status=${status}) after ${Date.now() - t0}ms:`, err instanceof Error ? err.message : err);
     if (status === 404 || status === 429) return false;
     return false;
   }
@@ -288,5 +329,6 @@ export async function isWalletLinkedToPrivyUser(
   } else {
     setCachedWalletOwner(requestedWallet, null);
   }
+  console.log(`[privy] final user lookup: wallets=${linkedWallets.size}, matches=${matches}, total=${Date.now() - t0}ms`);
   return matches;
 }

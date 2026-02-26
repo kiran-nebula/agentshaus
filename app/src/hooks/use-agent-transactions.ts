@@ -28,13 +28,13 @@ export function useAgentTransactions() {
   const { user } = usePrivy();
   const { wallets } = useConnectedStandardWallets();
 
-  const getWalletAddress = useCallback((): Address => {
-    const solanaWallet =
-      getExternalSolanaWallet(wallets) ??
-      getPreferredSolanaWallet(wallets, user);
-    if (!solanaWallet) throw new Error('No Solana wallet connected');
-    return solanaWallet.address as Address;
-  }, [wallets, user]);
+    const getWalletAddress = useCallback((): Address => {
+      const solanaWallet =
+        getPreferredSolanaWallet(wallets, user) ??
+        getExternalSolanaWallet(wallets);
+      if (!solanaWallet) throw new Error('No Solana wallet connected');
+      return solanaWallet.address as Address;
+    }, [wallets, user]);
 
   const createAgent = useCallback(
     async (args: {

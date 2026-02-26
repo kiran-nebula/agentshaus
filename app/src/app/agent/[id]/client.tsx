@@ -2,7 +2,12 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import type { Address } from '@solana/kit';
-import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
+import {
+  useIdentityToken,
+  useLinkAccount,
+  usePrivy,
+  useSolanaWallets,
+} from '@privy-io/react-auth';
 import { getAgentWalletPda, fetchAgentWalletBalance, fetchCurrentSoulOwner } from '@agents-haus/sdk';
 import { useAgentState } from '@/hooks/use-agent-state';
 import { useSolanaRpc } from '@/hooks/use-solana-rpc';
@@ -174,6 +179,39 @@ function parsePostingTopics(value: unknown): string[] {
     .split(/[|,]/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+const OWNER_WALLET_NOT_LINKED_HINTS = new Set([
+  'owner-wallet-not-linked',
+  'identity-token-present-but-owner-wallet-not-linked',
+]);
+
+function parseAuthHint(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function formatAgentApiError(payload: unknown, fallback: string): string {
+  const message =
+    payload &&
+    typeof payload === 'object' &&
+    typeof (payload as { error?: unknown }).error === 'string'
+      ? (payload as { error: string }).error
+      : fallback;
+  const currentOwner =
+    payload &&
+    typeof payload === 'object' &&
+    typeof (payload as { currentOwner?: unknown }).currentOwner === 'string'
+      ? (payload as { currentOwner: string }).currentOwner
+      : null;
+  if (
+    currentOwner &&
+    message === 'Forbidden: current user is not the Soul NFT owner'
+  ) {
+    return `${message} (current owner: ${currentOwner})`;
+  }
+  return message;
 }
 
 interface DeployPreset {
@@ -756,12 +794,9 @@ function SettingsModal({
                       <div className="text-xs text-ink-muted mb-3">
                         Runtime defaults to OpenClaw unless an IronClaw preset is saved for this agent.
                       </div>
-                      {isOwner && (
-                        <button onClick={handleDeployRuntime} disabled={loading} className="w-full rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50">
-                          Deploy Runtime
-                        </button>
-                      )}
-                      {!isOwner && <div className="text-xs text-ink-muted">Only the owner can deploy the runtime.</div>}
+                      <button onClick={handleDeployRuntime} disabled={loading} className="w-full rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50">
+                        Deploy Runtime
+                      </button>
                     </>
                   )}
                   {machineInfo?.deployed && (
@@ -826,17 +861,15 @@ function SettingsModal({
                           </div>
                         )}
                       </div>
-                      {isOwner && (
-                        <div className="flex flex-col gap-2 pt-1 sm:flex-row">
-                          <button onClick={handleDeployRuntime} disabled={loading} className="flex-1 rounded-xl bg-brand-500 px-3 py-2 text-xs font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50">Redeploy</button>
-                          {machineState === 'stopped' && (
-                            <button onClick={() => onMachineAction('start')} disabled={loading} className="flex-1 rounded-xl bg-success/10 text-success px-3 py-2 text-xs font-medium hover:bg-success/15 transition-colors disabled:opacity-50">Start</button>
-                          )}
-                          {machineState === 'started' && (
-                            <button onClick={() => onMachineAction('stop')} disabled={loading} className="flex-1 rounded-xl bg-danger/10 text-danger px-3 py-2 text-xs font-medium hover:bg-danger/15 transition-colors disabled:opacity-50">Stop</button>
-                          )}
-                        </div>
-                      )}
+                      <div className="flex flex-col gap-2 pt-1 sm:flex-row">
+                        <button onClick={handleDeployRuntime} disabled={loading} className="flex-1 rounded-xl bg-brand-500 px-3 py-2 text-xs font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50">Redeploy</button>
+                        {machineState === 'stopped' && (
+                          <button onClick={() => onMachineAction('start')} disabled={loading} className="flex-1 rounded-xl bg-success/10 text-success px-3 py-2 text-xs font-medium hover:bg-success/15 transition-colors disabled:opacity-50">Start</button>
+                        )}
+                        {machineState === 'started' && (
+                          <button onClick={() => onMachineAction('stop')} disabled={loading} className="flex-1 rounded-xl bg-danger/10 text-danger px-3 py-2 text-xs font-medium hover:bg-danger/15 transition-colors disabled:opacity-50">Stop</button>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1225,7 +1258,9 @@ interface Props {
 }
 
 export function AgentDetailClient({ soulMint }: Props) {
-  const { user } = usePrivy();
+  const { authenticated, login, getAccessToken, user } = usePrivy();
+  const { identityToken } = useIdentityToken();
+  const { linkWallet } = useLinkAccount();
   const { wallets } = useSolanaWallets();
   const searchParams = useSearchParams();
   const { rpc } = useSolanaRpc();
@@ -1252,7 +1287,9 @@ export function AgentDetailClient({ soulMint }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
+  const [deploying, setDeploying] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [authHint, setAuthHint] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState(DEFAULT_LLM_MODELS[0].id);
   const [modelOpen, setModelOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1265,6 +1302,20 @@ export function AgentDetailClient({ soulMint }: Props) {
   const queryModel = searchParams.get('model');
   const chatStorageKey = `agent-chat:v${CHAT_STORAGE_VERSION}:${soulMint}`;
   const [chatHydrated, setChatHydrated] = useState(false);
+  const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
+    const accessToken = await getAccessToken();
+    if (!accessToken) {
+      throw new Error('Wallet session expired. Reconnect and try again.');
+    }
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+    };
+    if (identityToken) {
+      headers['X-Privy-Identity-Token'] = identityToken;
+    }
+    return headers;
+  }, [getAccessToken, identityToken]);
 
   useEffect(() => {
     try {
@@ -1444,20 +1495,38 @@ export function AgentDetailClient({ soulMint }: Props) {
     }
   }, [chatStorageKey]);
 
-  const connectedWallet = getPreferredSolanaWallet(wallets, user)?.address;
   const displayOwner = currentSoulOwner || (agentState ? (agentState.owner as string) : null);
-  const isOwner = Boolean(connectedWallet && displayOwner && displayOwner === connectedWallet);
+  const connectedWalletAddresses = (wallets || [])
+    .map((wallet) => wallet.address)
+    .filter((address): address is string => typeof address === 'string' && address.trim().length > 0);
+  const preferredWalletAddress =
+    getPreferredSolanaWallet(wallets, user)?.address || null;
+  const isOwner = Boolean(
+    displayOwner &&
+      (connectedWalletAddresses.includes(displayOwner) ||
+        preferredWalletAddress === displayOwner),
+  );
   const isRunning = machineState === 'started';
 
   /* Chat */
   const sendMessage = async (overrideMessage?: string) => {
     if (chatLoading) return;
+    if (!authenticated) {
+      login();
+      return;
+    }
+    if (!isOwner) {
+      setChatError('Only the current Soul owner can chat with this runtime.');
+      return;
+    }
+
     const userMessage = (overrideMessage ?? input).trim();
     if (!userMessage) return;
     const modelForRequest = selectedModel;
     const history = clampChatMessages(messages);
     setInput('');
     setChatError(null);
+    setAuthHint(null);
     const newMessages: Message[] = clampChatMessages([
       ...history,
       { role: 'user', content: userMessage },
@@ -1465,9 +1534,10 @@ export function AgentDetailClient({ soulMint }: Props) {
     setMessages(newMessages);
     setChatLoading(true);
     try {
+      const authHeaders = await getAuthHeaders();
       const res = await fetch(`/api/agent/${soulMint}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({
           message: userMessage,
           history,
@@ -1475,7 +1545,11 @@ export function AgentDetailClient({ soulMint }: Props) {
         }),
       });
       const data = await res.json();
-      if (!res.ok) { setChatError(data.error || 'Failed to get response'); return; }
+      if (!res.ok) {
+        setAuthHint(parseAuthHint(data?.authHint));
+        setChatError(formatAgentApiError(data, 'Failed to get response'));
+        return;
+      }
       const responseModel =
         typeof data.model === 'string' && data.model.trim()
           ? data.model.trim()
@@ -1506,8 +1580,16 @@ export function AgentDetailClient({ soulMint }: Props) {
 
   /* Machine actions */
   const handleDeploy = async () => {
+    if (!authenticated) {
+      login();
+      return;
+    }
+
     setChatError(null);
+    setAuthHint(null);
+    setDeploying(true);
     try {
+      const authHeaders = await getAuthHeaders();
       const storedSoulText =
         typeof window !== 'undefined'
           ? localStorage.getItem(`agent-soul-text:${soulMint}`)?.trim() || ''
@@ -1562,13 +1644,14 @@ export function AgentDetailClient({ soulMint }: Props) {
 
       const deployRes = await fetch(`/api/agent/${soulMint}/deploy`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify(deployPayload),
       });
 
       const deployData = await deployRes.json().catch(() => null);
       if (!deployRes.ok) {
-        throw new Error(deployData?.error || 'Deploy failed');
+        setAuthHint(parseAuthHint(deployData?.authHint));
+        throw new Error(formatAgentApiError(deployData, 'Deploy failed'));
       }
 
       const runtimeExecutorAddress =
@@ -1585,7 +1668,10 @@ export function AgentDetailClient({ soulMint }: Props) {
       } catch (updateErr) {
         // Roll back the machine so we do not leave runtime and on-chain executor out of sync.
         try {
-          await fetch(`/api/agent/${soulMint}/machine`, { method: 'DELETE' });
+          await fetch(`/api/agent/${soulMint}/machine`, {
+            method: 'DELETE',
+            headers: authHeaders,
+          });
         } catch {
           // Best-effort rollback.
         }
@@ -1604,15 +1690,36 @@ export function AgentDetailClient({ soulMint }: Props) {
       const message = err instanceof Error ? err.message : 'Deploy failed';
       setChatError(message);
       throw new Error(message);
+    } finally {
+      setDeploying(false);
     }
   };
 
   const handleMachineAction = async (action: 'start' | 'stop') => {
+    if (!authenticated) {
+      login();
+      return;
+    }
+
     try {
-      await fetch(`/api/agent/${soulMint}/machine/${action}`, { method: 'POST' });
+      setAuthHint(null);
+      const authHeaders = await getAuthHeaders();
+      const response = await fetch(`/api/agent/${soulMint}/machine/${action}`, {
+        method: 'POST',
+        headers: authHeaders,
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        setAuthHint(parseAuthHint(payload?.authHint));
+        throw new Error(
+          formatAgentApiError(payload, `Failed to ${action} runtime`),
+        );
+      }
       await new Promise((r) => setTimeout(r, 2000));
       await fetchMachine();
-    } catch { /* */ }
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : 'Machine action failed');
+    }
   };
 
   /* ─── Loading / Error ─── */
@@ -1733,33 +1840,48 @@ export function AgentDetailClient({ soulMint }: Props) {
                 <p className="text-sm text-ink-muted">
                   Start the runtime to chat with your agent.
                 </p>
-                {isOwner && (
-                  <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
-                    {machineInfo?.deployed ? (
-                      <button
-                        onClick={() => handleMachineAction('start')}
-                        className="rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-black hover:bg-brand-600 transition-colors"
-                      >
-                        Start Runtime
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          handleDeploy().catch(() => {
-                            // Error is surfaced via chatError state.
-                          });
-                        }}
-                        className="rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-black hover:bg-brand-600 transition-colors"
-                      >
-                        Deploy Runtime
-                      </button>
-                    )}
+                <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+                  {machineInfo?.deployed ? (
                     <button
-                      onClick={() => setShowSettings(true)}
-                      className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-ink-secondary hover:bg-surface-overlay transition-colors"
+                      onClick={() => handleMachineAction('start')}
+                      className="rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-black hover:bg-brand-600 transition-colors"
                     >
-                      Open Settings
+                      Start Runtime
                     </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        handleDeploy().catch(() => {
+                          // Error is surfaced via chatError state.
+                        });
+                      }}
+                      disabled={deploying}
+                      className="rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-black hover:bg-brand-600 transition-colors disabled:opacity-50"
+                    >
+                      {deploying ? 'Deploying...' : 'Deploy Runtime'}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowSettings(true)}
+                    className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-ink-secondary hover:bg-surface-overlay transition-colors"
+                  >
+                    Open Settings
+                  </button>
+                </div>
+                {chatError && (
+                  <div className="mt-3 rounded-xl bg-danger/5 px-3 py-2 text-left text-xs text-danger">
+                    <div>{chatError}</div>
+                    {OWNER_WALLET_NOT_LINKED_HINTS.has(authHint || '') && (
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          onClick={() => linkWallet()}
+                          className="rounded-lg border border-danger/30 bg-surface px-2.5 py-1 text-xs text-danger transition-colors hover:bg-danger/10"
+                        >
+                          Link Wallet In Privy
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1813,7 +1935,22 @@ export function AgentDetailClient({ soulMint }: Props) {
                 }}
               />
             </div>
-            {chatError && <div className="mt-4 text-xs text-danger bg-danger/5 rounded-xl px-3 py-2">{chatError}</div>}
+            {chatError && (
+              <div className="mt-4 rounded-xl bg-danger/5 px-3 py-2 text-xs text-danger">
+                <div>{chatError}</div>
+                {OWNER_WALLET_NOT_LINKED_HINTS.has(authHint || '') && (
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() => linkWallet()}
+                      className="rounded-lg border border-danger/30 bg-surface px-2.5 py-1 text-xs text-danger transition-colors hover:bg-danger/10"
+                    >
+                      Link Wallet In Privy
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <>
@@ -1847,7 +1984,22 @@ export function AgentDetailClient({ soulMint }: Props) {
                     </div>
                   </div>
                 )}
-                {chatError && <div className="text-center text-xs text-danger bg-danger/5 rounded-xl px-3 py-2">{chatError}</div>}
+                {chatError && (
+                  <div className="rounded-xl bg-danger/5 px-3 py-2 text-center text-xs text-danger">
+                    <div>{chatError}</div>
+                    {OWNER_WALLET_NOT_LINKED_HINTS.has(authHint || '') && (
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          onClick={() => linkWallet()}
+                          className="rounded-lg border border-danger/30 bg-surface px-2.5 py-1 text-xs text-danger transition-colors hover:bg-danger/10"
+                        >
+                          Link Wallet In Privy
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div ref={messagesEndRef} />
               </div>
             </div>

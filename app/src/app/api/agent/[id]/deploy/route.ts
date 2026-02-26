@@ -8,6 +8,9 @@ import {
   normalizeRuntimeProvider,
   type RuntimeProvider,
 } from '@/lib/runtime-provider';
+import { requireAgentOwnership } from '@/lib/agent-ownership-auth';
+
+export const maxDuration = 60;
 
 let rpc: Rpc<SolanaRpcApi> | null = null;
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -475,11 +478,20 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const t0 = Date.now();
     const { id: soulMint } = await params;
 
+    const ownership = await requireAgentOwnership(request, soulMint);
+    console.log(`[deploy] auth took ${Date.now() - t0}ms for ${soulMint.slice(0, 8)}`);
+    if (!ownership.ok) {
+      return ownership.response;
+    }
+
     // 1. Verify agent exists on-chain
+    const t1 = Date.now();
     const connection = getRpc();
     const agentState = await waitForAgentState(connection, soulMint as Address);
+    console.log(`[deploy] waitForAgentState took ${Date.now() - t1}ms`);
     if (!agentState) {
       return NextResponse.json({ error: 'Agent not found on-chain' }, { status: 404 });
     }
@@ -585,8 +597,10 @@ export async function POST(
     );
 
     // 3. Check if machine already exists
+    const t2 = Date.now();
     const fly = getFlyClient();
     const existing = await fly.findMachineForAgent(soulMint);
+    console.log(`[deploy] findMachineForAgent took ${Date.now() - t2}ms, found=${!!existing}`);
     const existingSoulText = normalizeRuntimeSoulText(
       existing?.config?.env?.AGENT_SOUL_TEXT,
     );
@@ -694,6 +708,7 @@ export async function POST(
     if (ironclawRuntimeConfig?.error) {
       return NextResponse.json({ error: ironclawRuntimeConfig.error }, { status: 400 });
     }
+    const t3 = Date.now();
     const machine = await fly.createMachine({
       name: `agent-${soulMint.slice(0, 12)}`,
       image,
@@ -740,6 +755,9 @@ export async function POST(
         PORT: '3001',
       },
     });
+
+    console.log(`[deploy] createMachine took ${Date.now() - t3}ms, id=${machine.id}, state=${machine.state}`);
+    console.log(`[deploy] total elapsed ${Date.now() - t0}ms`);
 
     let machineState = machine.state;
     if (machineState !== 'started' && machineState !== 'starting') {

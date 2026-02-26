@@ -78,8 +78,8 @@ export function useSendTransaction() {
       additionalSigners?: KeypairSigner[],
     ): Promise<string> => {
       const wallet =
-        getExternalSolanaWallet(wallets) ??
-        getPreferredSolanaWallet(wallets, user);
+        getPreferredSolanaWallet(wallets, user) ??
+        getExternalSolanaWallet(wallets);
       if (!wallet) throw new Error('No wallet connected');
 
       const feePayer = wallet.address as Address;

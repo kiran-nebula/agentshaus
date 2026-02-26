@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createKeyPairFromBytes, getAddressFromPublicKey } from '@solana/kit';
 import { getFlyClient } from '@/lib/fly-machines';
+import { requireAgentOwnership } from '@/lib/agent-ownership-auth';
 import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -189,11 +190,16 @@ export async function GET(
  * Destroy the machine for this agent.
  */
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id: soulMint } = await params;
+    const ownership = await requireAgentOwnership(request, soulMint);
+    if (!ownership.ok) {
+      return ownership.response;
+    }
+
     const fly = getFlyClient();
     const machine = await fly.findMachineForAgent(soulMint);
 
