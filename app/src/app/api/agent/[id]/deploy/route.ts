@@ -671,13 +671,9 @@ export async function POST(
         );
       }
 
-      // force=true: destroy existing machine first
-      console.log(`Destroying existing machine ${existing.id} (force redeploy)`);
+      // force=true: force-destroy existing machine (no need to stop first)
+      console.log(`[deploy] destroying existing machine ${existing.id} state=${existing.state} (force redeploy)`);
       try {
-        // Stop first if running, then force-destroy
-        if (existing.state === 'started' || existing.state === 'starting') {
-          await fly.stopMachine(existing.id);
-        }
         await fly.destroyMachine(existing.id, true);
       } catch (destroyErr) {
         console.error('Failed to destroy existing machine:', destroyErr);
