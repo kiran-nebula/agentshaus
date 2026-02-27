@@ -54,7 +54,6 @@ export default function DashboardPage() {
   const [agentNames, setAgentNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [searched, setSearched] = useState(false);
-  const [searchMint, setSearchMint] = useState('');
   const [showActiveMachinesOnly, setShowActiveMachinesOnly] = useState(false);
   const preferredWalletAddress = getPreferredSolanaWallet(wallets, user)?.address as
     | Address
@@ -215,45 +214,6 @@ export default function DashboardPage() {
     };
   }, [authenticated, walletAddresses, rpc, hydrateCachedNames, fetchMachineStatesBulk]);
 
-  const handleSearch = useCallback(async () => {
-    if (!searchMint.trim()) return;
-    setLoading(true);
-    try {
-      const mint = searchMint.trim() as Address;
-      const [agentStateAddr] = await getAgentStatePda(mint);
-      const state = await fetchAgentState(rpc, agentStateAddr);
-      if (state) {
-        const mintKey = searchMint.trim();
-        const machineStatesPromise = fetchMachineStatesBulk([mintKey]);
-        const [agentWallet] = await getAgentWalletPda(mint);
-        const [balance, machineStates] = await Promise.all([
-          fetchAgentWalletBalance(rpc, agentWallet),
-          machineStatesPromise,
-        ]);
-        const machine = machineStates[mintKey] || defaultMachineState();
-        setAgents((prev) => {
-          if (prev.some((a) => a.soulMint === mintKey)) return prev;
-          return [
-            ...prev,
-            {
-              soulMint: mintKey,
-              state,
-              balance,
-              executor: state.executor as string,
-              machine,
-            },
-          ];
-        });
-        hydrateCachedNames([mintKey]);
-      }
-      setSearched(true);
-    } catch (err) {
-      console.error('Failed to find agent:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [searchMint, rpc, hydrateCachedNames, fetchMachineStatesBulk]);
-
   useEffect(() => {
     if (agents.length === 0) return;
     const unresolved = agents
@@ -332,24 +292,8 @@ export default function DashboardPage() {
             </Link>
           </div>
           <p className="max-w-3xl text-sm text-ink-secondary sm:text-base">
-            Search by Soul Mint, monitor balances, and jump directly into each agent for runtime and strategy controls.
+            Monitor balances and jump directly into each agent for runtime and strategy controls.
           </p>
-
-          <div className="mt-6 flex max-w-3xl flex-col gap-2 sm:flex-row">
-            <input
-              value={searchMint}
-              onChange={(e) => setSearchMint(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-              placeholder="Enter Soul Mint address to load agent..."
-              className="flex-1 rounded-xl border border-black/10 bg-white/90 px-4 py-2.5 text-sm text-ink font-mono placeholder:text-ink-muted focus:border-ink focus:outline-none transition-colors"
-            />
-            <button
-              onClick={handleSearch}
-              className="w-full rounded-xl border border-black/10 bg-white/90 px-5 py-2.5 text-sm font-medium text-ink-secondary transition-colors hover:bg-white sm:w-auto"
-            >
-              Load
-            </button>
-          </div>
         </div>
       </section>
 
