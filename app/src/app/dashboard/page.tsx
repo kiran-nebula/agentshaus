@@ -47,7 +47,7 @@ function isMachineActive(machine: AgentMachineState): boolean {
 }
 
 export default function DashboardPage() {
-  const { authenticated, login, user } = usePrivy();
+  const { authenticated, login, user, getAccessToken } = usePrivy();
   const { wallets } = useSolanaWallets();
   const { rpc } = useSolanaRpc();
   const [agents, setAgents] = useState<AgentEntry[]>([]);
@@ -89,9 +89,13 @@ export default function DashboardPage() {
       if (normalized.length === 0) return {};
 
       try {
+        const accessToken = await getAccessToken().catch(() => null);
         const response = await fetch('/api/agent/machines', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          },
           body: JSON.stringify({ soulMints: normalized }),
           cache: 'no-store',
         });
@@ -131,7 +135,7 @@ export default function DashboardPage() {
         );
       }
     },
-    [],
+    [getAccessToken],
   );
 
   const hydrateCachedNames = useCallback((mints: string[]) => {

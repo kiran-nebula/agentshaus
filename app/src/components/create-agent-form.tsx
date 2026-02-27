@@ -96,10 +96,11 @@ const RUNTIME_OPTIONS: Array<{
   },
 ];
 
-async function fetchSharedExecutorAddress(): Promise<string> {
+async function fetchSharedExecutorAddress(accessToken: string): Promise<string> {
   const response = await fetch('/api/runtime/executor', {
     method: 'GET',
     cache: 'no-store',
+    headers: { Authorization: `Bearer ${accessToken}` },
   });
   const payload = await response.json().catch(() => null);
   const runtimeExecutor =
@@ -114,13 +115,14 @@ async function fetchSharedExecutorAddress(): Promise<string> {
   return runtimeExecutor;
 }
 
-async function uploadSoulImage(file: File): Promise<string> {
+async function uploadSoulImage(file: File, accessToken: string): Promise<string> {
   const formData = new FormData();
   formData.set('file', file);
 
   const response = await fetch('/api/agent/image', {
     method: 'POST',
     body: formData,
+    headers: { Authorization: `Bearer ${accessToken}` },
   });
   const payload = await response.json().catch(() => null);
   const imageUrl = payload && typeof payload.url === 'string' ? payload.url.trim() : '';
@@ -136,10 +138,14 @@ async function generateSoulImage(args: {
   prompt: string;
   model: string;
   aspectRatio?: string;
+  accessToken: string;
 }): Promise<string> {
   const response = await fetch('/api/agent/image', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${args.accessToken}`,
+    },
     body: JSON.stringify({
       prompt: args.prompt,
       model: args.model,
@@ -298,10 +304,15 @@ export function CreateAgentForm() {
     setError(null);
 
     try {
+      const imageAccessToken = await getAccessToken();
+      if (!imageAccessToken) {
+        throw new Error('Wallet session expired. Reconnect and try again.');
+      }
       const generatedUrl = await generateSoulImage({
         prompt,
         model: soulImageModel.trim() || DEFAULT_OPENROUTER_IMAGE_MODEL,
         aspectRatio: DEFAULT_IMAGE_ASPECT_RATIO,
+        accessToken: imageAccessToken,
       });
       if (soulImagePreviewUrl) {
         URL.revokeObjectURL(soulImagePreviewUrl);
@@ -408,14 +419,20 @@ export function CreateAgentForm() {
       const soulAssetKeypair = await generateKeyPair();
       const soulAssetAddress = await getAddressFromPublicKey(soulAssetKeypair.publicKey);
 
-      // 2. Upload custom Soul image first so metadata points to a stable URL at mint time.
-      let uploadedImageUrl: string | null = generatedSoulImageUrl;
-      if (soulImageFile) {
-        uploadedImageUrl = await uploadSoulImage(soulImageFile);
+      // 2. Obtain access token early (needed for executor lookup and image upload).
+      const earlyAccessToken = await getAccessToken();
+      if (!earlyAccessToken) {
+        throw new Error('Wallet session expired. Reconnect and try again.');
       }
 
-      // 3. Resolve shared runtime executor address (server-managed keypair)
-      const executorAddress = await fetchSharedExecutorAddress();
+      // 3. Upload custom Soul image first so metadata points to a stable URL at mint time.
+      let uploadedImageUrl: string | null = generatedSoulImageUrl;
+      if (soulImageFile) {
+        uploadedImageUrl = await uploadSoulImage(soulImageFile, earlyAccessToken);
+      }
+
+      // 4. Resolve shared runtime executor address (server-managed keypair)
+      const executorAddress = await fetchSharedExecutorAddress(earlyAccessToken);
 
       // 4. Hash identity config for on-chain storage
       const identityConfig = JSON.stringify({

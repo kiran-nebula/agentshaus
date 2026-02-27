@@ -343,9 +343,10 @@ export default function FilesPage() {
       if (normalized.length === 0) return {};
 
       try {
+        const authHeaders = await getAuthHeaders().catch(() => ({}));
         const response = await fetch('/api/agent/machines', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
           body: JSON.stringify({ soulMints: normalized }),
           cache: 'no-store',
         });
@@ -385,7 +386,7 @@ export default function FilesPage() {
         );
       }
     },
-    [],
+    [getAuthHeaders],
   );
 
   const loadAgents = useCallback(async () => {

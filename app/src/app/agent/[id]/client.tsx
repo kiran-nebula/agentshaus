@@ -482,9 +482,24 @@ function SettingsModal({
   onDeploy: () => Promise<void>;
   onMachineAction: (action: 'start' | 'stop') => Promise<void>;
 }) {
-  const { authenticated, login } = usePrivy();
+  const { authenticated, login, getAccessToken } = usePrivy();
+  const { identityToken } = useIdentityToken();
   const { updateConfig, updateExecutor, fundAgent, withdrawFromAgent } = useAgentTransactions();
   const { sendTransaction } = useSendTransaction();
+
+  const getAuthHeaders = useCallback(async (): Promise<Record<string, string>> => {
+    const accessToken = await getAccessToken();
+    if (!accessToken) {
+      throw new Error('Wallet session expired. Reconnect and try again.');
+    }
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+    };
+    if (identityToken) {
+      headers['X-Privy-Identity-Token'] = identityToken;
+    }
+    return headers;
+  }, [getAccessToken, identityToken]);
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [loading, setLoading] = useState(false);
@@ -605,7 +620,8 @@ function SettingsModal({
     setCronError(null);
 
     try {
-      const res = await fetch(`/api/agent/${soulMint}/cron`, { cache: 'no-store' });
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`/api/agent/${soulMint}/cron`, { cache: 'no-store', headers: authHeaders });
       const data = await res.json().catch(() => null);
 
       if (!res.ok) {
@@ -639,7 +655,7 @@ function SettingsModal({
     } finally {
       setCronLoading(false);
     }
-  }, [soulMint]);
+  }, [soulMint, getAuthHeaders]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1496,14 +1512,16 @@ export function AgentDetailClient({ soulMint }: Props) {
 
   const fetchMachine = useCallback(async () => {
     try {
-      const res = await fetch(`/api/agent/${soulMint}/machine`);
+      const headers = await getAuthHeaders().catch(() => null);
+      if (!headers) return;
+      const res = await fetch(`/api/agent/${soulMint}/machine`, { headers });
       if (res.ok) {
         const data = await res.json();
         setMachineInfo(data);
         setMachineState(data.deployed ? (data.state || null) : null);
       }
     } catch { /* */ }
-  }, [soulMint]);
+  }, [soulMint, getAuthHeaders]);
 
   const fetchSoulOwner = useCallback(async () => {
     try {
