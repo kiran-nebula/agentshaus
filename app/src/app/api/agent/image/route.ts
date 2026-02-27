@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { put } from '@vercel/blob';
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  getBearerTokenFromAuthorizationHeader,
+  verifyPrivyAccessToken,
+} from '@/lib/privy-auth';
 
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 const MAX_IMAGE_PROMPT_LENGTH = 600;
@@ -343,6 +347,24 @@ async function handleImageGeneration(request: NextRequest): Promise<NextResponse
 
 export async function POST(request: NextRequest) {
   try {
+    const bearer = getBearerTokenFromAuthorizationHeader(
+      request.headers.get('authorization'),
+    );
+    if (!bearer) {
+      return NextResponse.json(
+        { error: 'Unauthorized', authHint: 'missing-bearer-token' },
+        { status: 401 },
+      );
+    }
+    try {
+      await verifyPrivyAccessToken(bearer);
+    } catch {
+      return NextResponse.json(
+        { error: 'Unauthorized', authHint: 'invalid-bearer-token' },
+        { status: 401 },
+      );
+    }
+
     if (!process.env.BLOB_READ_WRITE_TOKEN) {
       return NextResponse.json(
         { error: 'BLOB_READ_WRITE_TOKEN is not configured' },

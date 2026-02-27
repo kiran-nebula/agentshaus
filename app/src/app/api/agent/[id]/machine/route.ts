@@ -114,11 +114,16 @@ async function deriveExecutorAddress(executorSecret: string | undefined): Promis
  * Get machine status for this agent.
  */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id: soulMint } = await params;
+    const ownership = await requireAgentOwnership(request, soulMint);
+    if (!ownership.ok) {
+      return ownership.response;
+    }
+
     const fly = getFlyClient();
     const machine = await fly.findMachineForAgent(soulMint);
 

@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAgentOwnership } from '@/lib/agent-ownership-auth';
 
 type CronJob = {
   schedule: string;
@@ -84,10 +85,15 @@ function parseJobsForAgent(crontab: string, soulMint: string): CronJob[] {
  * Lists active local crontab jobs tagged for this agent.
  */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id: soulMint } = await params;
+  const ownership = await requireAgentOwnership(request, soulMint);
+  if (!ownership.ok) {
+    return ownership.response;
+  }
+
   const crontab = readCurrentCrontab();
 
   if (!crontab.ok) {

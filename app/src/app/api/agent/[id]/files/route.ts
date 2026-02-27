@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFlyClient, type FlyMachine } from '@/lib/fly-machines';
+import { requireAgentOwnership } from '@/lib/agent-ownership-auth';
 
 type FileRootKey = 'user' | 'workspace';
 type RuntimeTreeNode = {
@@ -190,6 +191,10 @@ export async function GET(
 ) {
   try {
     const { id: soulMint } = await params;
+    const ownership = await requireAgentOwnership(request, soulMint);
+    if (!ownership.ok) {
+      return ownership.response;
+    }
 
     const machine = await getRunningMachineForAgent(soulMint);
     if (machine instanceof NextResponse) return machine;
@@ -268,6 +273,10 @@ export async function POST(
 ) {
   try {
     const { id: soulMint } = await params;
+    const ownership = await requireAgentOwnership(request, soulMint);
+    if (!ownership.ok) {
+      return ownership.response;
+    }
 
     const machine = await getRunningMachineForAgent(soulMint);
     if (machine instanceof NextResponse) return machine;

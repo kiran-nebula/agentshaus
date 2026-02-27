@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFlyClient } from '@/lib/fly-machines';
+import { requireAgentOwnership } from '@/lib/agent-ownership-auth';
 import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
 
 /**
@@ -7,11 +8,16 @@ import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
  * Runtime health check for one agent machine.
  */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id: soulMint } = await params;
+    const ownership = await requireAgentOwnership(request, soulMint);
+    if (!ownership.ok) {
+      return ownership.response;
+    }
+
     const fly = getFlyClient();
     const machine = await fly.findMachineForAgent(soulMint);
 

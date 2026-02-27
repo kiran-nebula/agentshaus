@@ -1,5 +1,9 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createKeyPairFromBytes, getAddressFromPublicKey } from '@solana/kit';
+import {
+  getBearerTokenFromAuthorizationHeader,
+  verifyPrivyAccessToken,
+} from '@/lib/privy-auth';
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
@@ -60,8 +64,26 @@ async function deriveExecutorAddress(executorKeypair: string): Promise<string> {
  * GET /api/runtime/executor
  * Returns the server-managed shared runtime executor public key.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const bearer = getBearerTokenFromAuthorizationHeader(
+      request.headers.get('authorization'),
+    );
+    if (!bearer) {
+      return NextResponse.json(
+        { error: 'Unauthorized', authHint: 'missing-bearer-token' },
+        { status: 401 },
+      );
+    }
+    try {
+      await verifyPrivyAccessToken(bearer);
+    } catch {
+      return NextResponse.json(
+        { error: 'Unauthorized', authHint: 'invalid-bearer-token' },
+        { status: 401 },
+      );
+    }
+
     const keypair = getSharedExecutorKeypair();
     const runtimeExecutor = await deriveExecutorAddress(keypair);
     return NextResponse.json({ runtimeExecutor });

@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFlyClient, type FlyMachine } from '@/lib/fly-machines';
+import {
+  getBearerTokenFromAuthorizationHeader,
+  verifyPrivyAccessToken,
+} from '@/lib/privy-auth';
 import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
 
 type MachineStatus = {
@@ -60,6 +64,24 @@ function findMachineForSoulMint(
  */
 export async function POST(request: NextRequest) {
   try {
+    const bearer = getBearerTokenFromAuthorizationHeader(
+      request.headers.get('authorization'),
+    );
+    if (!bearer) {
+      return NextResponse.json(
+        { error: 'Unauthorized', authHint: 'missing-bearer-token' },
+        { status: 401 },
+      );
+    }
+    try {
+      await verifyPrivyAccessToken(bearer);
+    } catch {
+      return NextResponse.json(
+        { error: 'Unauthorized', authHint: 'invalid-bearer-token' },
+        { status: 401 },
+      );
+    }
+
     const body = await request.json().catch(() => ({}));
     const soulMints = normalizeSoulMints(body?.soulMints);
     if (soulMints.length === 0) {
