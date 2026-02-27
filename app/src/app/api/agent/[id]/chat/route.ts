@@ -4,6 +4,20 @@ import { spawnSync } from 'node:child_process';
 import { DEFAULT_LLM_MODELS } from '@agents-haus/common';
 import { getFlyClient } from '@/lib/fly-machines';
 import { requireAgentOwnership } from '@/lib/agent-ownership-auth';
+import {
+  checkConsecutiveRateLimit,
+  estimateChatCostUsd,
+  estimatePromptTokensFromMessages,
+  estimateTokensFromText,
+  extractChatUsage,
+  finalizeAgentCreditReservation,
+  releaseAgentCreditReservation,
+  reserveAgentCredits,
+  resolveAgentCreditPolicy,
+  resolveConsecutiveRateLimitConfig,
+  type AgentCreditReservation,
+  type CreditFinalizeResult,
+} from '@/lib/credits';
 import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
 
 type CronChatCommand =
@@ -1125,6 +1139,32 @@ export async function POST(
       return NextResponse.json({ response });
     }
 
+    const rateLimitConfig = resolveConsecutiveRateLimitConfig(process.env);
+    const rateLimitDecision = checkConsecutiveRateLimit({
+      agentId: soulMint,
+      userId: ownership.userId,
+      config: rateLimitConfig,
+    });
+    if (!rateLimitDecision.allowed) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil(rateLimitDecision.retryAfterMs / 1000),
+      );
+      return NextResponse.json(
+        {
+          error: `Rate limit triggered after ${rateLimitDecision.threshold}+ consecutive messages. Try again in ${retryAfterSeconds}s.`,
+          reason: rateLimitDecision.reason,
+          retryAfterMs: rateLimitDecision.retryAfterMs,
+          consecutiveMessages: rateLimitDecision.consecutive,
+          threshold: rateLimitDecision.threshold,
+        },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(retryAfterSeconds) },
+        },
+      );
+    }
+
     // Find the machine for this agent
     const fly = getFlyClient();
     const machine = await fly.findMachineForAgent(soulMint);
@@ -1206,60 +1246,153 @@ export async function POST(
       requestBody.model = requestedModel;
     }
 
-    const sendChatRequest = () =>
-      fetch(chatUrl, {
-        method: 'POST',
-        headers: runtimeHeaders,
-        body: JSON.stringify(requestBody),
+    const machineEnv = machine.config?.env || {};
+    const creditPolicy = resolveAgentCreditPolicy(machineEnv);
+    const reservedCompletionTokensRaw = Number.parseInt(
+      (
+        machineEnv.AGENT_CHAT_RESERVED_COMPLETION_TOKENS ||
+        process.env.AGENT_CHAT_RESERVED_COMPLETION_TOKENS ||
+        '1400'
+      ).trim(),
+      10,
+    );
+    const reservedCompletionTokens =
+      Number.isFinite(reservedCompletionTokensRaw) && reservedCompletionTokensRaw > 0
+        ? Math.min(reservedCompletionTokensRaw, 8_192)
+        : 1_400;
+    const modelForReservation =
+      typeof requestBody.model === 'string' && requestBody.model.trim()
+        ? requestBody.model.trim()
+        : ironclawActiveModel || requestedModel;
+    const promptTokenEstimate = estimatePromptTokensFromMessages(messages);
+    let creditReservation: AgentCreditReservation | null = null;
+
+    if (creditPolicy.enabled && creditPolicy.capUsd) {
+      const reserveUsd = estimateChatCostUsd({
+        modelId: modelForReservation,
+        promptTokens: promptTokenEstimate,
+        completionTokens: reservedCompletionTokens,
       });
-    let chatResponse = await sendChatRequest();
+      const reserveResult = reserveAgentCredits({
+        agentId: soulMint,
+        policy: creditPolicy,
+        reserveUsd,
+      });
+      if (!reserveResult.allowed) {
+        return NextResponse.json(
+          {
+            error: 'Agent credit cap reached for the current period',
+            credits: {
+              capUsd: reserveResult.capUsd,
+              spentUsd: reserveResult.spentUsd,
+              reservedUsd: reserveResult.reservedUsd,
+              remainingUsd: reserveResult.remainingUsd,
+              period: creditPolicy.period,
+              periodKey: creditPolicy.periodKey,
+            },
+          },
+          { status: 402 },
+        );
+      }
+      creditReservation = reserveResult.reservation;
+    }
 
-    if (!chatResponse.ok) {
-      let errText = await chatResponse.text();
-      const modelNotFound =
-        runtimeProvider === 'ironclaw' &&
-        (ironclawLlmBackend === 'nearai' || !ironclawLlmBackend) &&
-        /model\\s+'[^']+'\\s+not found/i.test(errText);
+    try {
+      const sendChatRequest = () =>
+        fetch(chatUrl, {
+          method: 'POST',
+          headers: runtimeHeaders,
+          body: JSON.stringify(requestBody),
+        });
+      let chatResponse = await sendChatRequest();
 
-      // Some UI presets are OpenRouter-only; retry once with IronClaw's runtime model.
-      if (
-        modelNotFound &&
-        ironclawDefaultModel &&
-        requestBody.model !== ironclawDefaultModel
-      ) {
-        requestBody.model = ironclawDefaultModel;
-        ironclawActiveModel = ironclawDefaultModel;
-        chatResponse = await sendChatRequest();
+      if (!chatResponse.ok) {
+        let errText = await chatResponse.text();
+        const modelNotFound =
+          runtimeProvider === 'ironclaw' &&
+          (ironclawLlmBackend === 'nearai' || !ironclawLlmBackend) &&
+          /model\\s+'[^']+'\\s+not found/i.test(errText);
+
+        // Some UI presets are OpenRouter-only; retry once with IronClaw's runtime model.
+        if (
+          modelNotFound &&
+          ironclawDefaultModel &&
+          requestBody.model !== ironclawDefaultModel
+        ) {
+          requestBody.model = ironclawDefaultModel;
+          ironclawActiveModel = ironclawDefaultModel;
+          chatResponse = await sendChatRequest();
+          if (!chatResponse.ok) {
+            errText = await chatResponse.text();
+          }
+        }
+
         if (!chatResponse.ok) {
-          errText = await chatResponse.text();
+          console.error('OpenClaw chat error:', chatResponse.status, errText);
+          const errorMessage =
+            runtimeProvider === 'ironclaw' &&
+            /model\\s+'[^']+'\\s+not found/i.test(errText)
+              ? 'Selected model is unavailable on IronClaw runtime.'
+              : 'Failed to reach agent runtime';
+          return NextResponse.json(
+            { error: errorMessage, details: errText },
+            { status: 502 },
+          );
         }
       }
 
-      if (!chatResponse.ok) {
-        console.error('OpenClaw chat error:', chatResponse.status, errText);
-        const errorMessage =
-          runtimeProvider === 'ironclaw' &&
-          /model\\s+'[^']+'\\s+not found/i.test(errText)
-            ? 'Selected model is unavailable on IronClaw runtime.'
-            : 'Failed to reach agent runtime';
-        return NextResponse.json(
-          { error: errorMessage, details: errText },
-          { status: 502 },
-        );
+      const data = await chatResponse.json();
+      const assistantMessage =
+        data.choices?.[0]?.message?.content || data.response || 'No response';
+      const responseModel =
+        typeof data.model === 'string' && data.model.trim()
+          ? data.model.trim()
+          : typeof requestBody.model === 'string' && requestBody.model.trim()
+            ? requestBody.model.trim()
+            : ironclawActiveModel || requestedModel;
+      const usage = extractChatUsage(data);
+      let creditState: CreditFinalizeResult | null = null;
+      if (creditReservation && creditPolicy.capUsd) {
+        const promptTokens = usage?.promptTokens ?? promptTokenEstimate;
+        const completionTokens =
+          usage?.completionTokens ?? estimateTokensFromText(assistantMessage);
+        const actualCostUsd = estimateChatCostUsd({
+          modelId: responseModel,
+          promptTokens,
+          completionTokens,
+        });
+        creditState = finalizeAgentCreditReservation({
+          reservation: creditReservation,
+          actualUsd: actualCostUsd,
+          capUsd: creditPolicy.capUsd,
+        });
+        creditReservation = null;
+      }
+
+      return NextResponse.json({
+        response: assistantMessage,
+        model: responseModel,
+        ...(usage ? { usage } : {}),
+        ...(creditState
+          ? {
+              credits: {
+                capUsd: creditState.capUsd,
+                spentUsd: creditState.spentUsd,
+                reservedUsd: creditState.reservedUsd,
+                remainingUsd: creditState.remainingUsd,
+                period: creditPolicy.period,
+                periodKey: creditPolicy.periodKey,
+              },
+            }
+          : {}),
+      });
+    } finally {
+      if (creditReservation) {
+        releaseAgentCreditReservation({
+          reservation: creditReservation,
+        });
       }
     }
-
-    const data = await chatResponse.json();
-    const assistantMessage =
-      data.choices?.[0]?.message?.content || data.response || 'No response';
-    const responseModel =
-      typeof data.model === 'string' && data.model.trim()
-        ? data.model.trim()
-        : typeof requestBody.model === 'string' && requestBody.model.trim()
-          ? requestBody.model.trim()
-          : ironclawActiveModel || requestedModel;
-
-    return NextResponse.json({ response: assistantMessage, model: responseModel });
   } catch (err) {
     console.error('Chat proxy error:', err);
     return NextResponse.json(

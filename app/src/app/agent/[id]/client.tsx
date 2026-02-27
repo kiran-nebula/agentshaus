@@ -61,6 +61,15 @@ interface MachineInfo {
     allowedChatIds?: string[];
     model?: string | null;
   };
+  credits?: {
+    enabled?: boolean;
+    capUsd?: number | null;
+    spentUsd?: number | null;
+    reservedUsd?: number | null;
+    remainingUsd?: number | null;
+    period?: string | null;
+    periodKey?: string | null;
+  };
 }
 
 interface Message {
@@ -152,6 +161,24 @@ function getModelName(modelId?: string): string | null {
   if (!normalized) return null;
   const found = DEFAULT_LLM_MODELS.find((entry) => entry.id === normalized);
   return found ? found.name : normalized;
+}
+
+function formatUsd(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  return `$${value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  })}`;
+}
+
+function parseOptionalNumber(value: unknown): number | null {
+  const candidate =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number.parseFloat(value.trim())
+        : Number.NaN;
+  return Number.isFinite(candidate) ? candidate : null;
 }
 
 function parsePostingTopics(value: unknown): string[] {
@@ -553,6 +580,12 @@ function SettingsModal({
   const executorMismatch = Boolean(
     runtimeExecutor && chainExecutor && runtimeExecutor !== chainExecutor,
   );
+  const creditCapUsd = machineInfo?.credits?.capUsd ?? null;
+  const creditsCapped = typeof creditCapUsd === 'number' && creditCapUsd > 0;
+  const creditSpentUsd = machineInfo?.credits?.spentUsd ?? 0;
+  const creditReservedUsd = machineInfo?.credits?.reservedUsd ?? 0;
+  const creditRemainingUsd = machineInfo?.credits?.remainingUsd ?? null;
+  const creditPeriod = machineInfo?.credits?.period || 'monthly';
 
   const handleDeployRuntime = async () => {
     setLoading(true);
@@ -837,6 +870,32 @@ function SettingsModal({
                                 ? 'token set'
                                 : 'disabled'}
                           </span>
+                        </div>
+                        <div className="border-t border-border-light pt-2">
+                          <div className="flex justify-between">
+                            <span className="text-ink-muted">Credit period</span>
+                            <span className="font-mono text-ink">{creditPeriod}</span>
+                          </div>
+                          <div className="mt-2 flex justify-between">
+                            <span className="text-ink-muted">Credit cap</span>
+                            <span className="font-mono text-ink">
+                              {creditsCapped ? formatUsd(creditCapUsd) : 'unlimited'}
+                            </span>
+                          </div>
+                          <div className="mt-2 flex justify-between">
+                            <span className="text-ink-muted">Credit spent</span>
+                            <span className="font-mono text-ink">{formatUsd(creditSpentUsd)}</span>
+                          </div>
+                          <div className="mt-2 flex justify-between">
+                            <span className="text-ink-muted">Credit reserved</span>
+                            <span className="font-mono text-ink">{formatUsd(creditReservedUsd)}</span>
+                          </div>
+                          <div className="mt-2 flex justify-between">
+                            <span className="text-ink-muted">Credit left</span>
+                            <span className="font-mono text-ink">
+                              {creditsCapped ? formatUsd(creditRemainingUsd ?? 0) : 'unlimited'}
+                            </span>
+                          </div>
                         </div>
                         {Array.isArray(machineInfo.telegram?.allowedChatIds) &&
                           machineInfo.telegram.allowedChatIds.length > 0 && (
@@ -1549,6 +1608,41 @@ export function AgentDetailClient({ soulMint }: Props) {
         setAuthHint(parseAuthHint(data?.authHint));
         setChatError(formatAgentApiError(data, 'Failed to get response'));
         return;
+      }
+      const creditsPayload =
+        data &&
+        typeof data === 'object' &&
+        'credits' in data &&
+        data.credits &&
+        typeof data.credits === 'object'
+          ? (data.credits as Record<string, unknown>)
+          : null;
+      if (creditsPayload) {
+        setMachineInfo((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            credits: {
+              ...prev.credits,
+              enabled:
+                typeof creditsPayload.enabled === 'boolean'
+                  ? creditsPayload.enabled
+                  : prev.credits?.enabled,
+              capUsd: parseOptionalNumber(creditsPayload.capUsd),
+              spentUsd: parseOptionalNumber(creditsPayload.spentUsd),
+              reservedUsd: parseOptionalNumber(creditsPayload.reservedUsd),
+              remainingUsd: parseOptionalNumber(creditsPayload.remainingUsd),
+              period:
+                typeof creditsPayload.period === 'string'
+                  ? creditsPayload.period
+                  : prev.credits?.period,
+              periodKey:
+                typeof creditsPayload.periodKey === 'string'
+                  ? creditsPayload.periodKey
+                  : prev.credits?.periodKey,
+            },
+          };
+        });
       }
       const responseModel =
         typeof data.model === 'string' && data.model.trim()
