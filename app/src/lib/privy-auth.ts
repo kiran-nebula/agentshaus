@@ -297,9 +297,12 @@ export async function isWalletLinkedToPrivyUser(
         if (tokenUserMatches) {
           setOwnershipCache(cacheKey);
           setCachedWalletOwner(requestedWallet, userId);
+          console.log(`[privy] wallet found via idToken in ${Date.now() - t0}ms`);
+          return true;
         }
-        console.log(`[privy] wallet found via idToken in ${Date.now() - t0}ms`);
-        return true;
+        // idToken's userId does not match the bearer token's userId —
+        // do NOT return true; fall through to authoritative API lookups.
+        console.log(`[privy] wallet found in idToken but userId mismatch, falling through to API verification`);
       }
       console.log(`[privy] idToken wallets [${[...tokenLinkedWallets].map(a => a.slice(0, 8) + '...').join(', ')}] do not include ${requestedWallet.slice(0, 8)}...`);
     } catch (err) {

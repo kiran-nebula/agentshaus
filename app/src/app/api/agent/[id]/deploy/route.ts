@@ -765,6 +765,17 @@ export async function POST(
     if (ironclawRuntimeConfig?.error) {
       return NextResponse.json({ error: ironclawRuntimeConfig.error }, { status: 400 });
     }
+    // Resolve gateway auth token — ironclaw config may include its own, otherwise
+    // fall back to server env vars or auto-generate a unique token per machine.
+    const baseGatewayAuthToken =
+      ironclawRuntimeConfig?.env?.GATEWAY_AUTH_TOKEN ||
+      normalizeRuntimeSecret(
+        process.env.FLY_IRONCLAW_GATEWAY_AUTH_TOKEN ||
+          process.env.IRONCLAW_GATEWAY_AUTH_TOKEN ||
+          process.env.GATEWAY_AUTH_TOKEN,
+        MAX_GATEWAY_AUTH_TOKEN_LENGTH,
+      ) ||
+      `agt_${randomBytes(24).toString('base64url').slice(0, 40)}`;
     const t3 = Date.now();
     const machine = await fly.createMachine({
       name: `agent-${soulMint.slice(0, 12)}`,
@@ -812,6 +823,7 @@ export async function POST(
         ...(runtimeCreditCapUsd && runtimeCreditCapUsd > 0
           ? { AGENT_CREDIT_CAP_USD: String(runtimeCreditCapUsd) }
           : {}),
+        GATEWAY_AUTH_TOKEN: baseGatewayAuthToken,
         ...(ironclawRuntimeConfig?.env || {}),
         PORT: '3001',
       },

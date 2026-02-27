@@ -131,6 +131,16 @@ function getRuntimeBaseUrl(): string {
   return `https://${appName}.fly.dev`;
 }
 
+function resolveGatewayAuthToken(machine: FlyMachine): string {
+  return (
+    process.env.FLY_IRONCLAW_GATEWAY_AUTH_TOKEN ||
+    process.env.IRONCLAW_GATEWAY_AUTH_TOKEN ||
+    process.env.GATEWAY_AUTH_TOKEN ||
+    machine.config?.env?.GATEWAY_AUTH_TOKEN ||
+    ''
+  ).trim();
+}
+
 async function getRunningMachineForAgent(
   soulMint: string,
 ): Promise<FlyMachine | NextResponse> {
@@ -224,13 +234,19 @@ export async function GET(
     }
     if (depth) search.set('depth', depth);
 
+    const gatewayToken = resolveGatewayAuthToken(machine);
+    const runtimeHeaders: Record<string, string> = {
+      'fly-force-instance-id': machine.id,
+    };
+    if (gatewayToken) {
+      runtimeHeaders.Authorization = `Bearer ${gatewayToken}`;
+    }
+
     const runtimeResponse = await fetchRuntimeWithTimeout(
       `${getRuntimeBaseUrl()}/v1/files/tree?${search.toString()}`,
       {
         method: 'GET',
-        headers: {
-          'fly-force-instance-id': machine.id,
-        },
+        headers: runtimeHeaders,
       },
     );
 
@@ -306,11 +322,17 @@ export async function POST(
       outbound.set('path', requestedPath.trim());
     }
 
+    const uploadGatewayToken = resolveGatewayAuthToken(machine);
+    const uploadHeaders: Record<string, string> = {
+      'fly-force-instance-id': machine.id,
+    };
+    if (uploadGatewayToken) {
+      uploadHeaders.Authorization = `Bearer ${uploadGatewayToken}`;
+    }
+
     const runtimeResponse = await fetchRuntimeWithTimeout(`${getRuntimeBaseUrl()}/v1/files/upload`, {
       method: 'POST',
-      headers: {
-        'fly-force-instance-id': machine.id,
-      },
+      headers: uploadHeaders,
       body: outbound,
     });
 

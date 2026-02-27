@@ -1191,20 +1191,14 @@ export async function POST(
       'Content-Type': 'application/json',
       'fly-force-instance-id': machine.id,
     };
-    if (runtimeProvider === 'ironclaw') {
-      const gatewayAuthToken = (
-        process.env.FLY_IRONCLAW_GATEWAY_AUTH_TOKEN ||
-        process.env.IRONCLAW_GATEWAY_AUTH_TOKEN ||
-        process.env.GATEWAY_AUTH_TOKEN ||
-        machine.config?.env?.GATEWAY_AUTH_TOKEN ||
-        ''
-      ).trim();
-      if (!gatewayAuthToken) {
-        return NextResponse.json(
-          { error: 'IronClaw runtime missing gateway auth token. Redeploy runtime.' },
-          { status: 502 },
-        );
-      }
+    const gatewayAuthToken = (
+      process.env.FLY_IRONCLAW_GATEWAY_AUTH_TOKEN ||
+      process.env.IRONCLAW_GATEWAY_AUTH_TOKEN ||
+      process.env.GATEWAY_AUTH_TOKEN ||
+      machine.config?.env?.GATEWAY_AUTH_TOKEN ||
+      ''
+    ).trim();
+    if (gatewayAuthToken) {
       runtimeHeaders.Authorization = `Bearer ${gatewayAuthToken}`;
     }
 

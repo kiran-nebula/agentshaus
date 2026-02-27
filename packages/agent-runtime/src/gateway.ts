@@ -20,6 +20,7 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
+const GATEWAY_AUTH_TOKEN = (process.env.GATEWAY_AUTH_TOKEN || '').trim();
 const OPENROUTER_API_KEY = (process.env.OPENROUTER_API_KEY || '').trim();
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const OPENROUTER_ALLOW_FALLBACKS =
@@ -1520,6 +1521,17 @@ export function startGateway(options?: { getRuntimeStatus?: RuntimeStatusProvide
           },
           runtime,
         });
+      }
+
+      // Require GATEWAY_AUTH_TOKEN for all non-health endpoints
+      if (GATEWAY_AUTH_TOKEN) {
+        const authHeader = req.headers.get('authorization') || '';
+        const bearerToken = authHeader.startsWith('Bearer ')
+          ? authHeader.slice(7).trim()
+          : '';
+        if (bearerToken !== GATEWAY_AUTH_TOKEN) {
+          return Response.json({ error: 'Unauthorized' }, { status: 401 });
+        }
       }
 
       if (url.pathname === '/v1/files/tree' && req.method === 'GET') {

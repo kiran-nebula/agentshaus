@@ -59,11 +59,23 @@ export async function GET(
     const healthPath = runtimeProvider === 'ironclaw' ? '/api/health' : '/health';
     const healthUrl = `https://${appName}.fly.dev${healthPath}`;
 
+    const runtimeHeaders: Record<string, string> = {
+      'fly-force-instance-id': machine.id,
+    };
+    const gatewayAuthToken = (
+      process.env.FLY_IRONCLAW_GATEWAY_AUTH_TOKEN ||
+      process.env.IRONCLAW_GATEWAY_AUTH_TOKEN ||
+      process.env.GATEWAY_AUTH_TOKEN ||
+      machine.config?.env?.GATEWAY_AUTH_TOKEN ||
+      ''
+    ).trim();
+    if (gatewayAuthToken) {
+      runtimeHeaders.Authorization = `Bearer ${gatewayAuthToken}`;
+    }
+
     const runtimeResponse = await fetch(healthUrl, {
       method: 'GET',
-      headers: {
-        'fly-force-instance-id': machine.id,
-      },
+      headers: runtimeHeaders,
       cache: 'no-store',
     });
 
