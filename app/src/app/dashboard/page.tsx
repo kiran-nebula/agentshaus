@@ -292,7 +292,7 @@ export default function DashboardPage() {
             </Link>
           </div>
           <p className="max-w-3xl text-sm text-ink-secondary sm:text-base">
-            Monitor balances and jump directly into each agent for runtime and strategy controls.
+            Mint a Soul NFT, monitor balances, and jump directly into each agent for runtime and strategy controls.
           </p>
         </div>
       </section>
