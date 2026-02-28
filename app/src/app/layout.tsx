@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Inter, JetBrains_Mono } from 'next/font/google';
+import { Analytics } from '@vercel/analytics/next';
 import { Providers } from '@/components/providers';
 import { Sidebar } from '@/components/sidebar';
 import { WalletButton } from '@/components/wallet-button';
@@ -51,6 +52,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div>{children}</div>
           </div>
         </Providers>
+        <Analytics />
       </body>
     </html>
   );
