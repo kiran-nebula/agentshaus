@@ -9,6 +9,7 @@
  */
 
 import type { Address } from '@solana/kit';
+import { getAddressEncoder, getProgramDerivedAddress } from '@solana/kit';
 import { findCurrentEpochStatus, createAgentBurnInstruction } from '@agents-haus/sdk';
 import {
   getRpc,
@@ -25,6 +26,37 @@ import {
   BURN_FLIP_TOKENS,
 } from '../../../../src/env';
 import { buildAndSendTransaction } from '../../../../src/tx';
+
+const addressEncoder = getAddressEncoder();
+
+/** Derive the epoch token mint PDA: seeds = ["epoch_token_mint", epoch_le_bytes] */
+async function getEpochTokenMint(epoch: bigint): Promise<Address> {
+  const epochBytes = new Uint8Array(8);
+  new DataView(epochBytes.buffer).setBigUint64(0, epoch, true);
+  const [addr] = await getProgramDerivedAddress({
+    programAddress: ALPHA_HAUS_PROGRAM_ID,
+    seeds: [new TextEncoder().encode('epoch_token_mint'), epochBytes],
+  });
+  return addr;
+}
+
+/** Derive the associated token account for Token-2022 */
+async function getAssociatedTokenAddress(
+  wallet: Address,
+  mint: Address,
+): Promise<Address> {
+  const ASSOCIATED_TOKEN_PROGRAM_ID =
+    'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL' as Address;
+  const [ata] = await getProgramDerivedAddress({
+    programAddress: ASSOCIATED_TOKEN_PROGRAM_ID,
+    seeds: [
+      addressEncoder.encode(wallet),
+      addressEncoder.encode(TOKEN_2022_PROGRAM_ID),
+      addressEncoder.encode(mint),
+    ],
+  });
+  return ata;
+}
 
 const SAFE_MEMO_CHAR_LIMIT = 300;
 
@@ -62,56 +94,27 @@ export async function postBurnMemo(params: { memo: string; amount?: number }) {
       burnAmount = currentTopBurn + BURN_FLIP_TOKENS;
     }
 
-    // Find the agent's epoch token account by scanning Token-2022 accounts.
-    // Any epoch token from the alpha.haus program is valid for burns.
-    type TokenAccountEntry = {
-      pubkey: Address;
-      account: {
-        data: { parsed: { info: { mint: string; tokenAmount: { amount: string } } } };
-      };
-    };
-    const tokenAccounts = await (rpc as any)
-      .getTokenAccountsByOwner(
-        agentWallet,
-        { programId: TOKEN_2022_PROGRAM_ID },
-        { encoding: 'jsonParsed' },
-      )
-      .send();
+    // Derive the epoch token mint PDA for the current epoch.
+    // The alpha.haus program enforces that the token_mint matches this PDA.
+    const tokenMint = await getEpochTokenMint(epoch);
+    const agentTokenAccount = await getAssociatedTokenAddress(agentWallet, tokenMint);
 
-    const entries: TokenAccountEntry[] = tokenAccounts?.value ?? [];
-    // Pick the account with the highest balance
-    let bestAccount: { address: Address; mint: Address; balance: bigint } | null = null;
-    for (const entry of entries) {
-      try {
-        const info = entry.account.data.parsed.info;
-        const balance = BigInt(info.tokenAmount.amount);
-        if (balance > 0n && (!bestAccount || balance > bestAccount.balance)) {
-          bestAccount = {
-            address: entry.pubkey,
-            mint: info.mint as Address,
-            balance,
-          };
-        }
-      } catch {
-        // skip malformed entries
+    // Check token balance for the current epoch's token
+    try {
+      const tokenInfo = await rpc
+        .getTokenAccountBalance(agentTokenAccount)
+        .send();
+      const tokenBalance = BigInt(tokenInfo.value.amount);
+      if (tokenBalance < burnAmount) {
+        return {
+          success: false,
+          error: `Insufficient epoch ${epoch} token balance: have ${tokenBalance}, need ${burnAmount}. Send epoch ${epoch} tokens (mint: ${tokenMint}) to the agent PDA: ${agentWallet}`,
+        };
       }
-    }
-
-    if (!bestAccount) {
+    } catch {
       return {
         success: false,
-        error: 'No epoch tokens found in agent wallet — send epoch tokens to the agent PDA before burning',
-      };
-    }
-
-    const agentTokenAccount = bestAccount.address;
-    const tokenMint = bestAccount.mint;
-    const tokenBalance = bestAccount.balance;
-
-    if (tokenBalance < burnAmount) {
-      return {
-        success: false,
-        error: `Insufficient token balance: have ${tokenBalance}, need ${burnAmount}`,
+        error: `No epoch ${epoch} tokens found. The agent needs tokens for the current epoch (mint: ${tokenMint}). Send them to the agent PDA: ${agentWallet}`,
       };
     }
 
