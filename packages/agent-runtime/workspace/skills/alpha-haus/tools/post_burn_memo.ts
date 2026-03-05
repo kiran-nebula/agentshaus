@@ -94,31 +94,80 @@ export async function postBurnMemo(params: { memo: string; amount?: number }) {
       burnAmount = currentTopBurn + BURN_FLIP_TOKENS;
     }
 
-    // Derive the epoch token mint PDA for the current epoch.
-    // The alpha.haus program enforces that the token_mint matches this PDA.
-    const tokenMint = await getEpochTokenMint(epoch);
-    const agentTokenAccount = await getAssociatedTokenAddress(agentWallet, tokenMint);
+    // Scan all Token-2022 accounts in the agent wallet to find epoch tokens.
+    // The alpha.haus program enforces that token_mint is a PDA derived from
+    // ["epoch_token_mint", burn_epoch]. We accept tokens from ANY epoch.
+    type TokenAccountEntry = {
+      pubkey: Address;
+      account: {
+        data: { parsed: { info: { mint: string; tokenAmount: { amount: string } } } };
+      };
+    };
+    const tokenAccounts = await (rpc as any)
+      .getTokenAccountsByOwner(
+        agentWallet,
+        { programId: TOKEN_2022_PROGRAM_ID },
+        { encoding: 'jsonParsed' },
+      )
+      .send();
 
-    // Check token balance for the current epoch's token
-    try {
-      const tokenInfo = await rpc
-        .getTokenAccountBalance(agentTokenAccount)
-        .send();
-      const tokenBalance = BigInt(tokenInfo.value.amount);
-      if (tokenBalance < burnAmount) {
-        return {
-          success: false,
-          error: `Insufficient epoch ${epoch} token balance: have ${tokenBalance}, need ${burnAmount}. Send epoch ${epoch} tokens (mint: ${tokenMint}) to the agent PDA: ${agentWallet}`,
-        };
+    const entries: TokenAccountEntry[] = tokenAccounts?.value ?? [];
+    // Build a map of mint -> { address, balance } for tokens with balances
+    const mintMap = new Map<string, { address: Address; balance: bigint }>();
+    for (const entry of entries) {
+      try {
+        const info = entry.account.data.parsed.info;
+        const balance = BigInt(info.tokenAmount.amount);
+        if (balance > 0n) {
+          mintMap.set(info.mint, { address: entry.pubkey, balance });
+        }
+      } catch {
+        // skip malformed entries
       }
-    } catch {
+    }
+
+    if (mintMap.size === 0) {
       return {
         success: false,
-        error: `No epoch ${epoch} tokens found. The agent needs tokens for the current epoch (mint: ${tokenMint}). Send them to the agent PDA: ${agentWallet}`,
+        error: `No epoch tokens found in agent wallet. Send epoch tokens to the agent PDA: ${agentWallet}`,
       };
     }
 
-    // Derive alpha.haus burn PDAs
+    // Match wallet mints to epoch PDAs: check current epoch first, then scan backwards.
+    let burnEpoch: bigint | null = null;
+    let tokenMint: Address | null = null;
+    let agentTokenAccount: Address | null = null;
+    let tokenBalance = 0n;
+
+    // Try current epoch first (most common), then backwards up to 200 epochs
+    const searchStart = epoch;
+    const searchEnd = epoch > 200n ? epoch - 200n : 1n;
+    for (let e = searchStart; e >= searchEnd; e--) {
+      const candidateMint = await getEpochTokenMint(e);
+      const found = mintMap.get(candidateMint as string);
+      if (found && found.balance >= burnAmount) {
+        burnEpoch = e;
+        tokenMint = candidateMint;
+        agentTokenAccount = found.address;
+        tokenBalance = found.balance;
+        break;
+      }
+    }
+
+    if (!burnEpoch || !tokenMint || !agentTokenAccount) {
+      // List what we found for a helpful error
+      const currentMint = await getEpochTokenMint(epoch);
+      const walletMints = [...mintMap.entries()]
+        .map(([m, v]) => `${m} (balance: ${v.balance})`)
+        .join(', ');
+      return {
+        success: false,
+        error: `No usable epoch tokens with sufficient balance (need ${burnAmount}). Wallet has: ${walletMints}. Current epoch ${epoch} mint: ${currentMint}. Send epoch tokens to the agent PDA: ${agentWallet}`,
+      };
+    }
+
+    // Derive alpha.haus burn PDAs — competition PDAs use the CURRENT epoch,
+    // but burn_epoch + token_mint correspond to the epoch whose tokens we burn.
     const [epochStatus] = await getEpochStatusPda(epoch);
     const [topBurner] = await getTopBurnerPda(epoch);
     const [otherBurners] = await getOtherBurnersPda(epoch);
@@ -143,7 +192,7 @@ export async function postBurnMemo(params: { memo: string; amount?: number }) {
       },
       {
         currEpoch: epoch,
-        burnEpoch: epoch,
+        burnEpoch: burnEpoch,
         burnAmount,
         memo: finalMemo,
         taggedAddresses: [],
@@ -156,6 +205,7 @@ export async function postBurnMemo(params: { memo: string; amount?: number }) {
       success: true,
       signature,
       epoch: Number(epoch),
+      burnEpoch: Number(burnEpoch),
       burnAmount: Number(burnAmount) / 1_000_000,
       memo: finalMemo,
       memoTruncated,
