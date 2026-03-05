@@ -9,7 +9,6 @@
  */
 
 import type { Address } from '@solana/kit';
-import { getAddressEncoder, getProgramDerivedAddress } from '@solana/kit';
 import { findCurrentEpochStatus, createAgentBurnInstruction } from '@agents-haus/sdk';
 import {
   getRpc,
@@ -23,31 +22,11 @@ import {
   getWasTopBurnerPda,
   ALPHA_HAUS_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
-  ALPHA_SOL_MINT,
   BURN_FLIP_TOKENS,
 } from '../../../../src/env';
 import { buildAndSendTransaction } from '../../../../src/tx';
 
-const addressEncoder = getAddressEncoder();
 const SAFE_MEMO_CHAR_LIMIT = 300;
-
-/** Derive the associated token account for Token-2022 */
-async function getAssociatedTokenAddress(
-  wallet: Address,
-  mint: Address,
-): Promise<Address> {
-  const ASSOCIATED_TOKEN_PROGRAM_ID =
-    'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL' as Address;
-  const [ata] = await getProgramDerivedAddress({
-    programAddress: ASSOCIATED_TOKEN_PROGRAM_ID,
-    seeds: [
-      addressEncoder.encode(wallet),
-      addressEncoder.encode(TOKEN_2022_PROGRAM_ID),
-      addressEncoder.encode(mint),
-    ],
-  });
-  return ata;
-}
 
 export async function postBurnMemo(params: { memo: string; amount?: number }) {
   const { memo, amount } = params;
@@ -83,28 +62,56 @@ export async function postBurnMemo(params: { memo: string; amount?: number }) {
       burnAmount = currentTopBurn + BURN_FLIP_TOKENS;
     }
 
-    // Derive agent's token account (Token-2022 ATA for ALPHA_SOL_MINT)
-    const agentTokenAccount = await getAssociatedTokenAddress(
-      agentWallet,
-      ALPHA_SOL_MINT,
-    );
+    // Find the agent's epoch token account by scanning Token-2022 accounts.
+    // Any epoch token from the alpha.haus program is valid for burns.
+    type TokenAccountEntry = {
+      pubkey: Address;
+      account: {
+        data: { parsed: { info: { mint: string; tokenAmount: { amount: string } } } };
+      };
+    };
+    const tokenAccounts = await (rpc as any)
+      .getTokenAccountsByOwner(
+        agentWallet,
+        { programId: TOKEN_2022_PROGRAM_ID },
+        { encoding: 'jsonParsed' },
+      )
+      .send();
 
-    // Check token balance
-    try {
-      const tokenInfo = await rpc
-        .getTokenAccountBalance(agentTokenAccount)
-        .send();
-      const tokenBalance = BigInt(tokenInfo.value.amount);
-      if (tokenBalance < burnAmount) {
-        return {
-          success: false,
-          error: `Insufficient token balance: have ${tokenBalance}, need ${burnAmount}`,
-        };
+    const entries: TokenAccountEntry[] = tokenAccounts?.value ?? [];
+    // Pick the account with the highest balance
+    let bestAccount: { address: Address; mint: Address; balance: bigint } | null = null;
+    for (const entry of entries) {
+      try {
+        const info = entry.account.data.parsed.info;
+        const balance = BigInt(info.tokenAmount.amount);
+        if (balance > 0n && (!bestAccount || balance > bestAccount.balance)) {
+          bestAccount = {
+            address: entry.pubkey,
+            mint: info.mint as Address,
+            balance,
+          };
+        }
+      } catch {
+        // skip malformed entries
       }
-    } catch {
+    }
+
+    if (!bestAccount) {
       return {
         success: false,
-        error: 'Agent token account does not exist — no tokens to burn',
+        error: 'No epoch tokens found in agent wallet — send epoch tokens to the agent PDA before burning',
+      };
+    }
+
+    const agentTokenAccount = bestAccount.address;
+    const tokenMint = bestAccount.mint;
+    const tokenBalance = bestAccount.balance;
+
+    if (tokenBalance < burnAmount) {
+      return {
+        success: false,
+        error: `Insufficient token balance: have ${tokenBalance}, need ${burnAmount}`,
       };
     }
 
@@ -125,7 +132,7 @@ export async function postBurnMemo(params: { memo: string; amount?: number }) {
         topBurner,
         otherBurners,
         agentTokenAccount,
-        tokenMint: ALPHA_SOL_MINT,
+        tokenMint,
         wasTopBurner,
         alphaHausProgram: ALPHA_HAUS_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
