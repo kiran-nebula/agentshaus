@@ -31,7 +31,6 @@ const MAX_RUNTIME_HOST_LENGTH = 200;
 const MAX_GATEWAY_AUTH_TOKEN_LENGTH = 600;
 const MAX_TELEGRAM_BOT_TOKEN_LENGTH = 700;
 const MAX_TELEGRAM_CHAT_IDS_LENGTH = 2_000;
-const MAX_AGENT_CREDIT_CAP_USD = 1_000_000;
 const IRONCLAW_LLM_BACKENDS = new Set([
   'nearai',
   'openai',
@@ -119,30 +118,6 @@ function parseIntInRange(
 
   if (!Number.isFinite(candidate)) return null;
   return Math.max(min, Math.min(max, candidate));
-}
-
-function parseFloatInRange(
-  value: unknown,
-  min: number,
-  max: number,
-): number | null {
-  const candidate =
-    typeof value === 'number'
-      ? value
-      : typeof value === 'string'
-        ? Number.parseFloat(value.trim())
-        : NaN;
-
-  if (!Number.isFinite(candidate)) return null;
-  const clamped = Math.max(min, Math.min(max, candidate));
-  return Math.round(clamped * 10_000) / 10_000;
-}
-
-function normalizeCreditPeriod(value: unknown): 'daily' | 'monthly' | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'daily' || normalized === 'monthly') return normalized;
-  return null;
 }
 
 function normalizeRuntimeSoulText(value: unknown): string {
@@ -536,8 +511,6 @@ export async function POST(
       telegramBotToken,
       telegramAllowedChatIds,
       telegramModel,
-      creditCapUsd,
-      creditPeriod,
       runtimeProvider: runtimeProviderRaw,
       runtime,
       provider,
@@ -623,12 +596,6 @@ export async function POST(
       telegramModel,
       MAX_RUNTIME_MODEL_LENGTH,
     );
-    const requestedCreditCapUsd = parseFloatInRange(
-      creditCapUsd,
-      0,
-      MAX_AGENT_CREDIT_CAP_USD,
-    );
-    const requestedCreditPeriod = normalizeCreditPeriod(creditPeriod);
 
     // 3. Check if machine already exists
     const t2 = Date.now();
@@ -693,31 +660,6 @@ export async function POST(
       requestedTelegramModel ||
       existingTelegramModel ||
       normalizeRuntimeSecret(process.env.TELEGRAM_MODEL, MAX_RUNTIME_MODEL_LENGTH);
-    const existingCreditCapUsd = parseFloatInRange(
-      existing?.config?.env?.AGENT_CREDIT_CAP_USD,
-      0,
-      MAX_AGENT_CREDIT_CAP_USD,
-    );
-    const defaultCreditCapUsd = parseFloatInRange(
-      process.env.DEFAULT_AGENT_CREDIT_CAP_USD ||
-        process.env.AGENT_CREDIT_CAP_USD,
-      0,
-      MAX_AGENT_CREDIT_CAP_USD,
-    );
-    const runtimeCreditCapUsd =
-      requestedCreditCapUsd ?? existingCreditCapUsd ?? defaultCreditCapUsd;
-    const existingCreditPeriod = normalizeCreditPeriod(
-      existing?.config?.env?.AGENT_CREDIT_CAP_PERIOD,
-    );
-    const defaultCreditPeriod = normalizeCreditPeriod(
-      process.env.DEFAULT_AGENT_CREDIT_CAP_PERIOD ||
-        process.env.AGENT_CREDIT_CAP_PERIOD,
-    );
-    const runtimeCreditPeriod =
-      requestedCreditPeriod ||
-      existingCreditPeriod ||
-      defaultCreditPeriod ||
-      'monthly';
     if (existing) {
       if (!force) {
         const existingRuntimeProvider = normalizeRuntimeProvider(
@@ -819,10 +761,6 @@ export async function POST(
         ),
         RUNTIME_SCHEDULER_MODE: schedulerMode,
         RUNTIME_AUTO_RECLAIM: schedulerAutoReclaim ? 'true' : 'false',
-        AGENT_CREDIT_CAP_PERIOD: runtimeCreditPeriod,
-        ...(runtimeCreditCapUsd && runtimeCreditCapUsd > 0
-          ? { AGENT_CREDIT_CAP_USD: String(runtimeCreditCapUsd) }
-          : {}),
         GATEWAY_AUTH_TOKEN: baseGatewayAuthToken,
         ...(ironclawRuntimeConfig?.env || {}),
         PORT: '3001',
@@ -871,10 +809,6 @@ export async function POST(
         hasBotToken: Boolean(runtimeTelegramBotToken),
         allowedChatIds: runtimeTelegramAllowedChatIds,
         model: runtimeTelegramModel || null,
-      },
-      credits: {
-        capUsd: runtimeCreditCapUsd ?? null,
-        period: runtimeCreditPeriod,
       },
     });
   } catch (err) {

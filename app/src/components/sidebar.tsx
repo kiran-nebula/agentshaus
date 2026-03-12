@@ -13,20 +13,29 @@ interface NavItem {
 const MAIN_NAV_ITEMS: NavItem[] = [
   {
     href: '/dashboard',
-    label: 'Agents',
+    label: 'New',
     icon: (
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-        <path d="M13.5 8.5l-3-3M4.5 2.5l1.7 4.3L2 11l4.2-.2L8.5 15l1.3-4.2L14 9.5" />
+        <path d="M8 3v10M3 8h10" />
       </svg>
     ),
   },
   {
-    href: '/skills',
-    label: 'Skills',
+    href: '/dashboard/discover',
+    label: 'Discover',
     icon: (
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 4.5h10M3 8h10M3 11.5h6" />
-        <circle cx="12.5" cy="11.5" r="1.5" />
+        <circle cx="8" cy="8" r="6" />
+        <path d="M10.5 5.5l-2 3-3 2 2-3 3-2z" />
+      </svg>
+    ),
+  },
+  {
+    href: '/dashboard/agents',
+    label: 'My Agents',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+        <path d="M13.5 8.5l-3-3M4.5 2.5l1.7 4.3L2 11l4.2-.2L8.5 15l1.3-4.2L14 9.5" />
       </svg>
     ),
   },
@@ -56,7 +65,13 @@ const FOOTER_NAV_ITEMS: NavItem[] = [
 
 function isItemActive(pathname: string, href: string): boolean {
   if (href === '/dashboard') {
-    return pathname === '/' || pathname.startsWith('/dashboard') || pathname.startsWith('/agent/') || pathname.startsWith('/create');
+    return pathname === '/' || pathname === '/dashboard' || pathname.startsWith('/create');
+  }
+  if (href === '/dashboard/discover') {
+    return pathname.startsWith('/dashboard/discover') || pathname.startsWith('/discover/');
+  }
+  if (href === '/dashboard/agents') {
+    return pathname.startsWith('/dashboard/agents') || pathname.startsWith('/agent/');
   }
   return pathname === href || pathname.startsWith(`${href}/`);
 }

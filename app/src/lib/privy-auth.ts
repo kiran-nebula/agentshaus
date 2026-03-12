@@ -276,7 +276,7 @@ export async function isWalletLinkedToPrivyUser(
   if (idToken) {
     try {
       const tIdToken = Date.now();
-      // Prefer claims from the session token to avoid rate-limited user lookups.
+      // Prefer claims from the session token to minimize extra user lookups.
       const tokenUser = await withTimeout(
         getPrivyClient().getUser({ idToken }),
         PRIVY_API_TIMEOUT_MS,

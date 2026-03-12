@@ -63,36 +63,19 @@ const MAX_GROK_API_KEY_LENGTH = 300;
 const RUNTIME_OPTIONS: Array<{
   id: RuntimeProvider;
   name: string;
-  imageSrc: string;
   badge?: string;
   description: string;
-  bullets: string[];
 }> = [
   {
     id: 'openclaw',
     name: 'OpenClaw',
-    imageSrc: '/agent-runtimes/openclaw.png',
-    description:
-      'Fast, lightweight AI assistant for everyday tasks and productivity.',
-    bullets: [
-      'Open source community',
-      'Persistent execution',
-      'Tool-integrated OS',
-    ],
+    description: 'Open-source, persistent execution runtime',
   },
   {
     id: 'ironclaw',
     name: 'IronClaw',
-    imageSrc: '/agent-runtimes/ironclaw.png',
     badge: 'Alpha',
-    description:
-      'Powerful agent designed to work with sensitive data and personal credentials.',
-    bullets: [
-      'Lightweight runtime',
-      'Structured tasks',
-      'Session-based runs',
-      'API-driven framework',
-    ],
+    description: 'Session-based runtime for sensitive workloads',
   },
 ];
 
@@ -593,14 +576,14 @@ export function CreateAgentForm() {
       {/* Step: Identity */}
       {step === 'identity' && (
         <div className="space-y-6">
-          <div className="rounded-2xl border border-border-light bg-[#131724] px-4 py-4 sm:px-5 sm:py-5">
-            <div className="mb-4 flex items-center gap-2">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white text-sm font-semibold text-[#131724]">
+          <div className="rounded-xl border border-border-light bg-surface px-4 py-4">
+            <div className="mb-3 flex items-center gap-2">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-ink text-xs font-semibold text-surface">
                 1
               </span>
-              <h3 className="text-xl font-semibold text-white">Choose Your Agent</h3>
+              <h3 className="text-lg font-semibold text-ink">Engine</h3>
             </div>
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="flex gap-2">
               {RUNTIME_OPTIONS.map((option) => {
                 const selected = runtimeProvider === option.id;
                 return (
@@ -611,48 +594,27 @@ export function CreateAgentForm() {
                       setRuntimeProvider(option.id);
                       setError(null);
                     }}
-                    className={`relative rounded-2xl border px-5 py-5 text-left transition-colors ${
+                    className={`flex items-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-medium transition-colors ${
                       selected
-                        ? 'border-white bg-[#222737]'
-                        : 'border-white/25 bg-[#1a1f2e] hover:border-white/45'
+                        ? 'border-ink bg-ink text-surface'
+                        : 'border-border bg-surface-raised text-ink hover:border-ink/40'
                     }`}
                   >
-                    {selected && (
-                      <span className="absolute right-4 top-4 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-[#111827]">
-                        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-current">
-                          <path d="M6.5 11.3 3 7.8l1.1-1.1 2.4 2.4 5.4-5.4L13 4.8z" />
-                        </svg>
+                    {option.name}
+                    {option.badge && (
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                        selected ? 'bg-white/20 text-surface' : 'bg-surface-overlay text-ink-muted'
+                      }`}>
+                        {option.badge}
                       </span>
                     )}
-                    <div className="h-12 w-12 overflow-hidden rounded-sm border border-white/15 bg-black/30">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={option.imageSrc}
-                        alt={`${option.name} logo`}
-                        className="h-full w-full object-contain object-center"
-                      />
-                    </div>
-                    <div className="mt-4 flex items-center gap-2">
-                      <div className="text-4xl font-semibold text-white">{option.name}</div>
-                      {option.badge && (
-                        <span className="rounded-md bg-white/12 px-2 py-0.5 text-xs font-medium text-white/85">
-                          {option.badge}
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-2 text-sm text-white/75">{option.description}</p>
-                    <div className="mt-4 space-y-1.5">
-                      {option.bullets.map((bullet) => (
-                        <div key={bullet} className="flex items-center gap-2 text-sm text-white/80">
-                          <span className="text-white/70">+</span>
-                          <span>{bullet}</span>
-                        </div>
-                      ))}
-                    </div>
                   </button>
                 );
               })}
             </div>
+            <p className="mt-2 text-xs text-ink-muted">
+              {RUNTIME_OPTIONS.find((o) => o.id === runtimeProvider)?.description}
+            </p>
           </div>
 
           <div className="rounded-xl border border-border-light bg-surface px-4 py-4">
@@ -677,7 +639,7 @@ export function CreateAgentForm() {
               <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-ink text-xs font-semibold text-surface">
                 3
               </span>
-              <h3 className="text-lg font-semibold text-ink">The other bits</h3>
+              <h3 className="text-lg font-semibold text-ink">Profile</h3>
             </div>
 
             <div>
@@ -737,9 +699,6 @@ export function CreateAgentForm() {
                     {isGeneratingSoulImage ? 'Generating...' : 'Generate with OpenRouter'}
                   </button>
                 </div>
-                <p className="mt-1.5 text-xs text-ink-muted">
-                  Uses your project&apos;s OpenRouter key and stores the generated image in Blob for stable NFT metadata.
-                </p>
               </div>
 
               <div className="my-2 text-center text-xs text-ink-muted">or upload manually</div>

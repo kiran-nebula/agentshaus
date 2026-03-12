@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createKeyPairFromBytes, getAddressFromPublicKey } from '@solana/kit';
 import { getFlyClient } from '@/lib/fly-machines';
 import { requireAgentOwnership } from '@/lib/agent-ownership-auth';
-import { getAgentCreditSnapshot, resolveAgentCreditPolicy } from '@/lib/credits';
 import { normalizeRuntimeProvider } from '@/lib/runtime-provider';
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -132,11 +131,6 @@ export async function GET(
     }
 
     const env = machine.config?.env || {};
-    const creditPolicy = resolveAgentCreditPolicy(env);
-    const creditSnapshot = getAgentCreditSnapshot({
-      agentId: soulMint,
-      policy: creditPolicy,
-    });
     const runtimeExecutor = await deriveExecutorAddress(env.EXECUTOR_KEYPAIR);
     const schedulerEnabled = parseBoolean(env.RUNTIME_SCHEDULER_ENABLED);
     const schedulerIntervalMinutes = parseIntValue(
@@ -183,15 +177,6 @@ export async function GET(
         hasBotToken: Boolean((env.TELEGRAM_BOT_TOKEN || '').trim()),
         allowedChatIds: telegramAllowedChatIds,
         model: env.TELEGRAM_MODEL || null,
-      },
-      credits: {
-        enabled: creditSnapshot.enabled,
-        capUsd: creditSnapshot.capUsd,
-        spentUsd: creditSnapshot.spentUsd,
-        reservedUsd: creditSnapshot.reservedUsd,
-        remainingUsd: creditSnapshot.remainingUsd,
-        period: creditSnapshot.period,
-        periodKey: creditSnapshot.periodKey,
       },
       createdAt: machine.created_at,
       updatedAt: machine.updated_at,
